@@ -18,32 +18,18 @@ def redact_sensitive_info(input_pdf_bytes):
         for page_num in range(page_count):
             page = doc[page_num]
 
-            # --- 1페이지 특정 영역 마스킹 ---
+            # --- 1페이지 특정 영역 마스킹 (사용자 지정 비율 좌표) ---
             if page_num == 0:
-                # 1. 사진 영역 (좌표는 예시 PDF 기반으로 추정)
-                # (x0, y0, x1, y1)
-                photo_rect = fitz.Rect(60, 60, 160, 180) 
-                page.add_redact_annot(photo_rect, fill=(1, 1, 1))
-
-                # 2. 상단 표 (반, 번호, 담임성명)
-                # (학년, 구분, 학과, 반, 번호, 담임성명)
-                # 1학년
-                page.add_redact_annot(fitz.Rect(350, 100, 550, 115), fill=(1, 1, 1)) 
-                # 2학년
-                page.add_redact_annot(fitz.Rect(350, 115, 550, 130), fill=(1, 1, 1))
-                # 3학년
-                page.add_redact_annot(fitz.Rect(350, 130, 550, 145), fill=(1, 1, 1))
-
-                # 3. 1. 인적·학적사항 (성명, 성별, 주민등록번호, 주소)
-                page.add_redact_annot(fitz.Rect(150, 200, 550, 250), fill=(1, 1, 1)) 
+                # 상단 표와 사진 영역만 제거 (제목은 제외, 약 12%~25%)
+                rect1 = fitz.Rect(0, page.rect.height * 0.12, page.rect.width, page.rect.height * 0.25)
+                page.add_redact_annot(rect1, fill=(1, 1, 1))
                 
-                # 4. 1. 인적·학적사항 (학적사항, 특기사항 내용)
-                # 학적사항
-                page.add_redact_annot(fitz.Rect(150, 250, 550, 300), fill=(1, 1, 1))
-                # 특기사항
-                page.add_redact_annot(fitz.Rect(150, 300, 550, 320), fill=(1, 1, 1))
+                # "1. 인적·학적사항" 섹션 제거 (대략적 위치 25%~45%)
+                rect2 = fitz.Rect(0, page.rect.height * 0.25, page.rect.width, page.rect.height * 0.45)
+                page.add_redact_annot(rect2, fill=(1, 1, 1))
 
             # --- "고등학교" 키워드 검색 및 마스킹 ---
+            # (이 부분은 사용자 요청대로 완벽하게 유지됩니다)
             # "(  )고등학교" 또는 "대성고등학교" 등 구체적인 학교 이름
             # 예시 파일의 "대성고등학교"를 기준으로 검색
             # 1~2페이지 수상경력, 5~6페이지 봉사활동, 모든 페이지 하단
@@ -56,11 +42,9 @@ def redact_sensitive_info(input_pdf_bytes):
                 for inst in text_instances:
                     page.add_redact_annot(inst, fill=(1, 1, 1))
 
-            # --- 모든 페이지 하단 (반, 번호, 성명) 마스킹 ---
-            # (좌표는 예시 PDF 기반으로 추정)
-            # 예: "반 7 번호 13 성명 박지호"
-            footer_rect = fitz.Rect(300, 780, 550, 810) 
-            page.add_redact_annot(footer_rect, fill=(1, 1, 1))
+            # --- 모든 페이지 하단 꼬리말 제거 (사용자 지정 비율 좌표, 하단 8%) ---
+            rect_footer = fitz.Rect(0, page.rect.height * 0.92, page.rect.width, page.rect.height)
+            page.add_redact_annot(rect_footer, fill=(1, 1, 1))
 
             # 실제 리댁션 적용 (내용 제거)
             page.apply_redactions()
