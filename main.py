@@ -26,59 +26,59 @@ def redact_sensitive_info(input_pdf_bytes):
             if page_num == 0:
                 # 1. 상단 첫번째 표: 사진, 반, 번호, 담임성명 내용 제거
                 
-                # 사진 영역 마스킹 (좌측 상단)
+                # 사진 영역 마스킹 (좌측 상단 - 더 넓게)
                 photo_rect = fitz.Rect(
-                    page_width * 0.03,   # x0
-                    page_height * 0.046, # y0
-                    page_width * 0.17,   # x1
-                    page_height * 0.145  # y1
+                    page_width * 0.025,  # x0
+                    page_height * 0.038, # y0
+                    page_width * 0.195,  # x1
+                    page_height * 0.152  # y1
                 )
                 page.add_redact_annot(photo_rect, fill=(1, 1, 1))
 
                 # 반/번호/담임성명 내용 영역 (1, 2, 3학년 모두 포함)
                 table_content_rect = fitz.Rect(
-                    page_width * 0.27,   # x0 - 구분 열 이후부터
-                    page_height * 0.055, # y0 - 1학년 줄 시작
-                    page_width * 0.97,   # x1 - 우측 끝까지
-                    page_height * 0.135  # y1 - 3학년 줄 끝
+                    page_width * 0.32,   # x0 - 학과 열 이후부터
+                    page_height * 0.053, # y0 - 1학년 줄 시작
+                    page_width * 0.98,   # x1 - 우측 끝까지
+                    page_height * 0.14   # y1 - 3학년 줄 끝
                 )
                 page.add_redact_annot(table_content_rect, fill=(1, 1, 1))
                 
                 # 2. 1. 인적·학적사항 표 내용 제거
                 
-                # 학생정보 영역 (성명, 성별, 주민등록번호)
+                # 학생정보 영역 (성명, 성별, 주민등록번호 - 한 줄로)
                 student_info_rect = fitz.Rect(
-                    page_width * 0.15,   # x0 - 라벨 이후
-                    page_height * 0.155, # y0
-                    page_width * 0.97,   # x1
-                    page_height * 0.193  # y1
+                    page_width * 0.13,   # x0 - 성명: 이후
+                    page_height * 0.162, # y0
+                    page_width * 0.98,   # x1
+                    page_height * 0.184  # y1
                 )
                 page.add_redact_annot(student_info_rect, fill=(1, 1, 1))
                 
                 # 주소 영역
                 address_rect = fitz.Rect(
-                    page_width * 0.08,   # x0
-                    page_height * 0.193, # y0
-                    page_width * 0.97,   # x1
-                    page_height * 0.218  # y1
+                    page_width * 0.09,   # x0 - 주소: 이후
+                    page_height * 0.184, # y0
+                    page_width * 0.98,   # x1
+                    page_height * 0.206  # y1
                 )
                 page.add_redact_annot(address_rect, fill=(1, 1, 1))
                 
-                # 학적사항 내용 영역
+                # 학적사항 내용 영역 (3줄)
                 academic_rect = fitz.Rect(
-                    page_width * 0.15,   # x0
-                    page_height * 0.23,  # y0
-                    page_width * 0.97,   # x1
-                    page_height * 0.26   # y1
+                    page_width * 0.13,   # x0
+                    page_height * 0.224, # y0
+                    page_width * 0.98,   # x1
+                    page_height * 0.257  # y1
                 )
                 page.add_redact_annot(academic_rect, fill=(1, 1, 1))
 
                 # 특기사항 내용 영역
                 notes_rect = fitz.Rect(
-                    page_width * 0.15,   # x0
-                    page_height * 0.275, # y0
-                    page_width * 0.97,   # x1
-                    page_height * 0.33   # y1
+                    page_width * 0.13,   # x0
+                    page_height * 0.272, # y0
+                    page_width * 0.98,   # x1
+                    page_height * 0.325  # y1
                 )
                 page.add_redact_annot(notes_rect, fill=(1, 1, 1))
                 
@@ -95,18 +95,27 @@ def redact_sensitive_info(input_pdf_bytes):
             # 1) 맨 위 작은 글씨 (학교명/날짜/IP/이름)
             footer_top_rect = fitz.Rect(
                 0,                      # x0 - 좌측 끝부터
-                page_height * 0.001,    # y0 - 맨 위
+                0,                      # y0 - 맨 위
                 page_width,             # x1 - 우측 끝까지
-                page_height * 0.018     # y1
+                page_height * 0.015     # y1
             )
             page.add_redact_annot(footer_top_rect, fill=(1, 1, 1))
 
-            # 2) 맨 아래 큰 글씨 (반, 번호, 성명)
+            # 2) 맨 아래 큰 글씨 - "/" 기호
+            footer_slash_rect = fitz.Rect(
+                page_width * 0.015,     # x0
+                page_height * 0.982,    # y0
+                page_width * 0.035,     # x1
+                page_height * 0.992     # y1
+            )
+            page.add_redact_annot(footer_slash_rect, fill=(1, 1, 1))
+            
+            # 3) 맨 아래 큰 글씨 - 반, 번호, 성명 내용
             footer_bottom_rect = fitz.Rect(
-                page_width * 0.55,      # x0 - 중간 우측부터
-                page_height * 0.978,    # y0
+                page_width * 0.72,      # x0 - "반" 숫자부터
+                page_height * 0.982,    # y0
                 page_width,             # x1 - 우측 끝까지
-                page_height * 0.995     # y1
+                page_height * 0.992     # y1
             )
             page.add_redact_annot(footer_bottom_rect, fill=(1, 1, 1))
 
