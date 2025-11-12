@@ -209,7 +209,7 @@ def redact_sensitive_info(input_pdf_bytes: bytes) -> bytes | None:
                     numeric_words = [w for w in acad_words if re.fullmatch(r"\d{1,4}", str(w[4]).strip())]
                     if numeric_words:
                         num_line_rects = union_rect_of_words(numeric_words)
-                        num_line_rects = [border_safe_trim(r, pw, ph, pad_lr=0.0050, trim_tb=0.0028) for r in num_line_rects]
+                        num_line_rects = [border_safe_trim(r, pw, ph, pad_lr=0.0150, trim_tb=0.0028) for r in num_line_rects]
                         redact_rects(page, num_line_rects)
 
             # ---------------- B. "(고등학교)" 등 검색 마스킹(유지) ----------------
