@@ -23,7 +23,7 @@ def border_safe_trim(rect: fitz.Rect, pw: float, ph: float,
 
 
 def inflate(rect: fitz.Rect, dx: float, dy: float) -> fitz.Rect:
-    """선이 없는 영역(예: 사진)에서 여유를 조금 주는 확장."""
+    """선이 없는 영역(예: 사진)에서 여유를 주는 확장."""
     return fitz.Rect(rect.x0 - dx, rect.y0 - dy, rect.x1 + dx, rect.y1 + dy)
 
 
@@ -95,8 +95,8 @@ def redact_sensitive_info(input_pdf_bytes: bytes) -> bytes | None:
     """
     - 1페이지 첫 표: '반/번호/담임성명' 내용만 삭제(테두리/중간선 보존)
     - 1페이지 인적·학적사항: 학생정보(성명/성별/주민등록번호/주소) 내용만 삭제
-    - 1페이지 학적사항: 두 줄 연도(예: 2023) 포함 내용 전체 삭제(특기사항 전까지, 연도는 추가 강화)
-    - '(고등학교)' 검색 마스킹 + 모든 페이지 하단(날짜/반·번호·성명)은 내용만 삭제, '1 / 16' 등의 페이지 표기는 유지
+    - 1페이지 학적사항: 두 줄 연도(예: 2023) 포함 내용 전체 삭제(‘202’ 잔여 방지 강화)
+    - '(고등학교)' 검색 마스킹 + 모든 페이지 하단(날짜/반·번호·성명) 내용만 삭제, 페이지 표기(예: 1 / 16)는 보존
     """
     try:
         doc = fitz.open(stream=input_pdf_bytes, filetype="pdf")
@@ -193,29 +193,23 @@ def redact_sensitive_info(input_pdf_bytes: bytes) -> bytes | None:
                     addr_rects = [border_safe_trim(r, pw, ph) for r in addr_rects]
                     redact_rects(page, addr_rects)
 
-                # 학적사항(특기사항 전까지) — 라벨 오른쪽 전체 + '연도' 강화 마스킹
+                # 학적사항(특기사항 전까지) — 라벨 오른쪽 전체 + 숫자라인 추가 보강
                 if lab_acad:
                     y_top = lab_acad.y0 - ph*0.004
                     y_bot = (lab_extra.y0 - ph*0.004) if lab_extra else y1_bot
-                    # 라벨 바로 오른쪽부터(연도처럼 왼쪽에 붙은 값도 포함)
+                    # 라벨 바로 오른쪽부터(왼쪽에 붙은 숫자까지 포함)
                     acad_words = words_in_range(page, y_top, y_bot, x_min=lab_acad.x1 + pw * 0.001)
+                    # 1차: 전체 라인 마스킹(선 보존)
                     acad_rects = union_rect_of_words(acad_words, x_min=lab_acad.x1 + pw * 0.001)
                     acad_rects = [border_safe_trim(r, pw, ph) for r in acad_rects]
                     redact_rects(page, acad_rects)
-
-                    # ★ 연도(4자리) 보강: '2023' 등을 별도 탐지해서 좌우 여유를 더 주고 마스킹
-                    year_words = []
-                    for w in acad_words:
-                        if re.fullmatch(r"20\d{2}", w[4]):  # 2000~2099 연도
-                            year_words.append(w)
-                    if year_words:
-                        yr_rects = []
-                        for w in year_words:
-                            r = fitz.Rect(w[0], w[1], w[2], w[3])
-                            # 연도는 좌우 여유를 더 크게(0.0018) 주어 '202'만 남는 문제 방지
-                            r = border_safe_trim(r, pw, ph, pad_lr=0.0018, trim_tb=0.0028)
-                            yr_rects.append(r)
-                        redact_rects(page, yr_rects)
+                    # 2차: 숫자 포함 라인 보강(좌우 더 크게 → '202' 잔여 제거)
+                    numeric_words = [w for w in acad_words if re.fullmatch(r"\d{1,4}", str(w[4]).strip())]
+                    if numeric_words:
+                        num_line_rects = union_rect_of_words(numeric_words)
+                        # 좌우 여유 3배(0.003), 상하 trim은 동일
+                        num_line_rects = [border_safe_trim(r, pw, ph, pad_lr=0.0030, trim_tb=0.0028) for r in num_line_rects]
+                        redact_rects(page, num_line_rects)
 
             # ---------------- B. "(고등학교)" 등 검색 마스킹(유지) ----------------
             for t in ["대성고등학교", "상명대학교사범대학부속여자고등학교", "(", "고등학교"]:
@@ -229,47 +223,37 @@ def redact_sensitive_info(input_pdf_bytes: bytes) -> bytes | None:
             # (0) 최상단 얇은 머리글은 유지(기존과 동일)
             page.add_redact_annot(fitz.Rect(0, 0, pw, ph * 0.015), fill=(1, 1, 1))
 
-            # (1) 하단 3.5%에서 단어 수집
-            FOOT_Y0 = ph * 0.965
+            # (1) 하단 6%에서 단어 수집(날짜, 반/번호/성명, 이름 포함 전부 수집)
+            FOOT_Y0 = ph * 0.94
             fwords = words_in_range(page, FOOT_Y0, ph)
 
-            # (2) 보존해야 하는 단어: '/'와 그 좌우 가까운 숫자(페이지 표기)
+            # (2) 보존해야 하는 토큰: '/'와 같은 줄의 좌/우 숫자(최대 각각 2개까지)
             keep_idxs = set()
             for i, w in enumerate(fwords):
-                txt = str(w[4]).strip()
-                if txt == "/":
+                if str(w[4]).strip() == "/":
+                    # 슬래시는 보존
                     keep_idxs.add(i)
-                    # 같은 라인의 좌우 숫자(가까운 것) 보존: 거리 기준은 폭의 3%
-                    for j, w2 in enumerate(fwords):
-                        if j == i:
-                            continue
-                        # 같은 라인(세로 위치 근접)
-                        if abs(w2[1] - w[1]) < 3.0:
-                            if re.fullmatch(r"\d+", str(w2[4]).strip()):
-                                # 슬래시와 수평으로 가깝다면 보존
-                                if abs((w2[0] + w2[2]) / 2 - (w[0] + w[2]) / 2) < pw * 0.03:
-                                    keep_idxs.add(j)
+                    # 같은 라인(세로 위치 근접)에서 좌/우 숫자 보존
+                    same_line = [ (j, w2) for j, w2 in enumerate(fwords)
+                                  if j != i and abs(w2[1] - w[1]) < 3.0 and re.fullmatch(r"\d+", str(w2[4]).strip()) ]
+                    # 슬래시 중심과의 x 거리 기준으로 가까운 숫자 최대 2개씩 선택
+                    sx = (w[0] + w[2]) / 2
+                    same_line.sort(key=lambda t: abs(((t[1][0] + t[1][2]) / 2) - sx))
+                    # 좌우에서 각각 1개씩 우선 보존
+                    left = [j for j, ww in same_line if ((ww[0] + ww[2]) / 2) < sx]
+                    right = [j for j, ww in same_line if ((ww[0] + ww[2]) / 2) >= sx]
+                    if left:
+                        keep_idxs.add(left[0])
+                    if right:
+                        keep_idxs.add(right[0])
 
-            # (3) 라벨(반/번호/성명)은 남기고, 그 외 날짜·이름·값(7, 13, 박지호 등)만 제거
-            targets = []
-            for idx, w in enumerate(fwords):
-                if idx in keep_idxs:
-                    continue
-                txt = str(w[4]).strip()
-                if txt in {"반", "번호", "성명"}:
-                    continue  # 라벨은 남김
-                targets.append(w)
+            # (3) 타겟(=삭제): keep을 제외한 모든 하단 단어
+            targets = [w for idx, w in enumerate(fwords) if idx not in keep_idxs]
 
-            # (4) 하단 타겟 단어들을 라인별로 묶어 선보존 트림 후 마스킹
+            # (4) 타겟을 라인 단위로 묶어 선보존 트림 후 마스킹
             t_rects = union_rect_of_words(targets)
-            t_rects = [border_safe_trim(r, pw, ph, pad_lr=0.0012, trim_tb=0.0032) for r in t_rects]
+            t_rects = [border_safe_trim(r, pw, ph, pad_lr=0.0016, trim_tb=0.0032) for r in t_rects]
             redact_rects(page, t_rects)
-
-            # (5) 기존 보정(슬래시 부근 작은 잔여/테두리 바깥 글씨)
-            page.add_redact_annot(fitz.Rect(pw * 0.010, ph * 0.978, pw * 0.055, ph * 0.994), fill=(1, 1, 1))
-            # 맨 아래 아주 작은 텍스트 라인
-            rs = fitz.Rect(pw * 0.58, ph * 0.996, pw * 0.995, ph * 1.000)
-            page.add_redact_annot(inflate(rs, pw * 0.002, 0), fill=(1, 1, 1))
 
             # 실제 적용
             page.apply_redactions()
