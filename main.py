@@ -95,7 +95,7 @@ def redact_sensitive_info(input_pdf_bytes: bytes) -> bytes | None:
     """
     - 1페이지 첫 표: '반/번호/담임성명' 내용만 삭제(테두리/중간선 보존)
     - 1페이지 인적·학적사항: 학생정보(성명/성별/주민등록번호/주소) 내용만 삭제
-    - 1페이지 학적사항: 두 줄 연도(예: 2023) 포함 내용 전체 삭제(‘202’ 잔여 방지 강화)
+    - 1페이지 학적사항: 두 줄 연도(예: 2023) 포함 내용 전체 삭제(‘202’ 잔여 방지 강화) + ★하드-와이프 추가
     - '(고등학교)' 검색 마스킹 + 모든 페이지 하단:
         · 하단 표/날짜/이름 전체 삭제(표선까지 포함, 즉 완전 제거)
         · 단, '페이지수(예: 1 / 16)'만 정확히 보존
@@ -195,22 +195,37 @@ def redact_sensitive_info(input_pdf_bytes: bytes) -> bytes | None:
                     addr_rects = [border_safe_trim(r, pw, ph) for r in addr_rects]
                     redact_rects(page, addr_rects)
 
-                # 학적사항(특기사항 전까지) — 라벨 오른쪽 전체 + 숫자라인 추가 보강
+                # 학적사항(특기사항 전까지) — 라벨 오른쪽 전체 + 숫자라인 보강 + ★하드-와이프 추가
                 if lab_acad:
                     y_top = lab_acad.y0 - ph*0.004
                     y_bot = (lab_extra.y0 - ph*0.004) if lab_extra else y1_bot
                     # 라벨 바로 오른쪽부터(왼쪽에 붙은 숫자까지 포함)
                     acad_words = words_in_range(page, y_top, y_bot, x_min=lab_acad.x1 + pw * 0.001)
+
                     # 1차: 전체 라인 마스킹(선 보존)
                     acad_rects = union_rect_of_words(acad_words, x_min=lab_acad.x1 + pw * 0.001)
                     acad_rects = [border_safe_trim(r, pw, ph) for r in acad_rects]
                     redact_rects(page, acad_rects)
+
                     # 2차: 숫자 포함 라인 보강(좌우 더 크게 → '202' 잔여 제거)
                     numeric_words = [w for w in acad_words if re.fullmatch(r"\d{1,4}", str(w[4]).strip())]
                     if numeric_words:
                         num_line_rects = union_rect_of_words(numeric_words)
-                        num_line_rects = [border_safe_trim(r, pw, ph, pad_lr=0.0150, trim_tb=0.0028) for r in num_line_rects]
+                        num_line_rects = [border_safe_trim(r, pw, ph, pad_lr=0.0030, trim_tb=0.0028) for r in num_line_rects]
                         redact_rects(page, num_line_rects)
+
+                    # 3차: ★ 하드-와이프 — 각 줄을 '셀 오른쪽 경계'까지 확실하게 덮기 (표선 보존)
+                    right_bound = pw * 0.985  # 표 우측 경계 근처(필요 시 0.982~0.988로 미세 조정)
+                    line_rects = union_rect_of_words(acad_words)  # 줄 단위 bbox들
+                    hard_rects = []
+                    for r in line_rects:
+                        y0 = r.y0 + ph * 0.0012   # 위/아래 살짝 깎아 가로선 보호
+                        y1 = r.y1 - ph * 0.0012
+                        x0 = lab_acad.x1 + pw * 0.001  # 라벨 바로 오른쪽부터
+                        x1 = right_bound               # 셀 오른쪽 경계까지
+                        if y1 > y0:
+                            hard_rects.append(fitz.Rect(x0, y0, x1, y1))
+                    redact_rects(page, hard_rects)
 
             # ---------------- B. "(고등학교)" 등 검색 마스킹(유지) ----------------
             for t in ["대성고등학교", "상명대학교사범대학부속여자고등학교", "고등학교"]:
@@ -221,7 +236,6 @@ def redact_sensitive_info(input_pdf_bytes: bytes) -> bytes | None:
                     pass
 
             # ---------------- C. 모든 페이지 하단: 표/날짜/이름 완전 삭제 + 페이지수 보존 ----------------
-            # 하단 밴드 범위(표 전체와 날짜가 들어오는 높이를 넉넉하게 포함)
             band_y0 = ph * 0.93
             band_y1 = ph * 1.00
 
@@ -234,7 +248,6 @@ def redact_sensitive_info(input_pdf_bytes: bytes) -> bytes | None:
                 if str(w[4]).strip() == "/":
                     sx = (w[0] + w[2]) / 2
                     same_line_nums = [ww for ww in fwords if abs(ww[1] - w[1]) < 3.0 and re.fullmatch(r"\d+", str(ww[4]).strip())]
-                    # 슬래시와 x-거리 가까운 순서로 정렬
                     same_line_nums.sort(key=lambda ww: abs(((ww[0] + ww[2]) / 2) - sx))
                     left = [ww for ww in same_line_nums if ((ww[0] + ww[2]) / 2) < sx]
                     right = [ww for ww in same_line_nums if ((ww[0] + ww[2]) / 2) >= sx]
@@ -242,29 +255,23 @@ def redact_sensitive_info(input_pdf_bytes: bytes) -> bytes | None:
                     if right:
                         keep.append(right[0])
                     keep.append(w)  # 슬래시 자체
-                    # 보존 bbox 결합
                     xs0 = [r[0] for r in keep]; ys0 = [r[1] for r in keep]
                     xs1 = [r[2] for r in keep]; ys1 = [r[3] for r in keep]
-                    # 좌우/상하에 아주 소폭 여유를 둬서 페이지수만 안전 보존
                     margin_x = pw * 0.006
                     margin_y = ph * 0.004
                     keep_rect = fitz.Rect(min(xs0) - margin_x, min(ys0) - margin_y,
                                           max(xs1) + margin_x, max(ys1) + margin_y)
-                    break  # 첫 번째 슬래시 기준으로 보존
+                    break  # 첫 슬래시 기준
 
-            # (3) 하단 밴드 전체를 두 개의 큰 직사각형으로 리댁션(보존 영역을 피해서 덮기)
+            # (3) 하단 밴드 전체를 보존영역을 피해서 완전 덮기(표선 포함)
             if keep_rect is not None:
-                # 왼쪽 영역
                 left_rect = fitz.Rect(0, band_y0, max(keep_rect.x0, 0), band_y1)
-                # 오른쪽 영역
                 right_rect = fitz.Rect(min(keep_rect.x1, pw), band_y0, pw, band_y1)
-                # 표선까지 완전히 지우기 위해 아주 소폭 위로 확장
                 expand = ph * 0.002
                 left_rect = fitz.Rect(left_rect.x0, max(0, left_rect.y0 - expand), left_rect.x1, min(band_y1, left_rect.y1 + expand))
                 right_rect = fitz.Rect(right_rect.x0, max(0, right_rect.y0 - expand), right_rect.x1, min(band_y1, right_rect.y1 + expand))
                 redact_rects(page, [left_rect, right_rect])
             else:
-                # 슬래시(페이지수)를 찾지 못한 경우: 하단 전부 제거
                 redact_rects(page, [fitz.Rect(0, band_y0, pw, band_y1)])
 
             # 실제 적용
@@ -282,7 +289,7 @@ def redact_sensitive_info(input_pdf_bytes: bytes) -> bytes | None:
 # -------------------- Streamlit UI --------------------
 st.set_page_config(page_title="PDF 개인정보 보호 앱", page_icon="🔒")
 st.title("🔒 PDF 민감정보 마스킹 앱")
-st.write("상단 표/인적·학적사항(연도 포함)과 하단(표·날짜·이름)은 완전히 삭제하고, 페이지수(예: 1 / 16)만 남깁니다.")
+st.write("상단 표/인적·학적사항(연도 포함)과 하단(표·날짜·이름)은 완전 삭제, 페이지수(예: 1 / 16)만 남깁니다.")
 uploaded_file = st.file_uploader("PDF 파일 업로드", type=["pdf"])
 
 if uploaded_file:
