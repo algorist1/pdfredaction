@@ -24,79 +24,91 @@ def redact_sensitive_info(input_pdf_bytes):
 
             # --- 1페이지 특정 영역 마스킹 (표 내용은 삭제, 표 구조는 유지) ---
             if page_num == 0:
-                # 1. 상단 표: 반, 번호, 담임성명, 사진 내용만 제거
+                # 1. 상단 첫번째 표: 사진, 반, 번호, 담임성명 내용 제거
                 
-                # 사진 영역 마스킹 (좌표를 좁게 재조정)
-                # x0=60, y0=60, x1=160, y1=180 -> 비율: 0.12~0.30, 0.07~0.22
-                photo_rect = fitz.Rect(page_width * 0.11, page_height * 0.07, page_width * 0.28, page_height * 0.22)
+                # 사진 영역 마스킹 (좌측 상단)
+                photo_rect = fitz.Rect(
+                    page_width * 0.03,   # x0
+                    page_height * 0.046, # y0
+                    page_width * 0.17,   # x1
+                    page_height * 0.145  # y1
+                )
                 page.add_redact_annot(photo_rect, fill=(1, 1, 1))
 
-                # 반/번호/담임성명 (내용이 들어가는 우측 영역만 제거)
-                # 1, 2, 3학년의 반/번호/담임성명 필드를 한 번에 마스킹
-                # x_start: 350px (0.45), y_start: 95px (0.12), x_end: 550px (0.9), y_end: 150px (0.20)
-                x_start_top = page_width * 0.44  # 내용 시작점
-                x_end_top = page_width * 0.9     # 끝까지
-                y_start_top = page_height * 0.11  # 1학년 줄 시작
-                y_end_top = page_height * 0.20   # 3학년 줄 끝
+                # 반/번호/담임성명 내용 영역 (1, 2, 3학년 모두 포함)
+                table_content_rect = fitz.Rect(
+                    page_width * 0.27,   # x0 - 구분 열 이후부터
+                    page_height * 0.055, # y0 - 1학년 줄 시작
+                    page_width * 0.97,   # x1 - 우측 끝까지
+                    page_height * 0.135  # y1 - 3학년 줄 끝
+                )
+                page.add_redact_annot(table_content_rect, fill=(1, 1, 1))
+                
+                # 2. 1. 인적·학적사항 표 내용 제거
+                
+                # 학생정보 영역 (성명, 성별, 주민등록번호)
+                student_info_rect = fitz.Rect(
+                    page_width * 0.15,   # x0 - 라벨 이후
+                    page_height * 0.155, # y0
+                    page_width * 0.97,   # x1
+                    page_height * 0.193  # y1
+                )
+                page.add_redact_annot(student_info_rect, fill=(1, 1, 1))
+                
+                # 주소 영역
+                address_rect = fitz.Rect(
+                    page_width * 0.08,   # x0
+                    page_height * 0.193, # y0
+                    page_width * 0.97,   # x1
+                    page_height * 0.218  # y1
+                )
+                page.add_redact_annot(address_rect, fill=(1, 1, 1))
+                
+                # 학적사항 내용 영역
+                academic_rect = fitz.Rect(
+                    page_width * 0.15,   # x0
+                    page_height * 0.23,  # y0
+                    page_width * 0.97,   # x1
+                    page_height * 0.26   # y1
+                )
+                page.add_redact_annot(academic_rect, fill=(1, 1, 1))
 
-                rect_top_table_content = fitz.Rect(x_start_top, y_start_top, x_end_top, y_end_top)
-                page.add_redact_annot(rect_top_table_content, fill=(1, 1, 1))
+                # 특기사항 내용 영역
+                notes_rect = fitz.Rect(
+                    page_width * 0.15,   # x0
+                    page_height * 0.275, # y0
+                    page_width * 0.97,   # x1
+                    page_height * 0.33   # y1
+                )
+                page.add_redact_annot(notes_rect, fill=(1, 1, 1))
                 
-                
-                # 2. 1. 인적·학적사항 표 내용만 제거
-                # 성명, 성별, 주민등록번호, 주소 내용 영역
-                # x_start: 150px (0.25), x_end: 550px (0.9)
-                x_content_start = page_width * 0.24 # 내용 시작점
-                x_content_end = page_width * 0.9   # 끝까지
-                
-                # '학생정보' 및 '주소' 내용 영역 (y: 200px ~ 250px -> 0.25 ~ 0.31)
-                y_info_start = page_height * 0.24
-                y_info_end = page_height * 0.31
-                rect_info_content = fitz.Rect(x_content_start, y_info_start, x_content_end, y_info_end)
-                page.add_redact_annot(rect_info_content, fill=(1, 1, 1))
-                
-                # '학적사항' 내용 영역 (y: 250px ~ 300px -> 0.31 ~ 0.37)
-                y_h_start = page_height * 0.31
-                y_h_end = page_height * 0.37
-                rect_h_content = fitz.Rect(x_content_start, y_h_start, x_content_end, y_h_end)
-                page.add_redact_annot(rect_h_content, fill=(1, 1, 1))
-
-                # '특기사항' 내용 영역 (y: 300px ~ 320px -> 0.37 ~ 0.40)
-                y_s_start = page_height * 0.37
-                y_s_end = page_height * 0.40
-                rect_s_content = fitz.Rect(x_content_start, y_s_start, x_content_end, y_s_end)
-                page.add_redact_annot(rect_s_content, fill=(1, 1, 1))
-                
-            # --- "고등학교" 키워드 검색 및 마스킹 (기존 로직 유지) ---
-            # 1~2페이지 수상경력, 5~6페이지 봉사활동, 모든 페이지 하단에 위치한 학교 이름 제거
-            
-            # 검색할 텍스트 리스트 (예시 파일을 기반으로 지정)
+            # --- "(고등학교)" 키워드 검색 및 마스킹 (기존 로직 유지) ---
             search_texts = ["대성고등학교", "상명대학교사범대학부속여자고등학교", "(", "고등학교"] 
             
             for text in search_texts:
-                # 텍스트를 찾아 해당 영역을 마스킹합니다.
-                # ( )고등학교 문구가 통째로 안 보이게 처리하는 요구사항을 반영하기 위해
-                # ( 와 고등학교 문자를 포함했습니다.
                 text_instances = page.search_for(text)
                 for inst in text_instances:
                     page.add_redact_annot(inst, fill=(1, 1, 1))
 
-
-            # --- 모든 페이지 맨 하단의 반, 번호, 성명란 내용 및 작은 글씨 이름 마스킹 ---
-            # 모든 페이지 맨 하단 (꼬리말 내용만 제거)
-            # 예시 파일: / 16 대성고등학교 2025년 9월 9일 16 반 7 번호 13 성명 박지호
-            # 작은 글씨: 대성고등학교/2025.09.09 17:00/10.25.***.89/노지호
+            # --- 모든 페이지 맨 하단의 개인정보 마스킹 ---
             
-            # 작은 글씨 정보 마스킹 (맨 위 꼬리말)
-            # y: 790px (0.975) 정도의 좁은 영역
-            rect_footer_small_name = fitz.Rect(page_width * 0.6, page_height * 0.955, page_width, page_height * 0.965)
-            page.add_redact_annot(rect_footer_small_name, fill=(1, 1, 1))
+            # 1) 맨 위 작은 글씨 (학교명/날짜/IP/이름)
+            footer_top_rect = fitz.Rect(
+                0,                      # x0 - 좌측 끝부터
+                page_height * 0.001,    # y0 - 맨 위
+                page_width,             # x1 - 우측 끝까지
+                page_height * 0.018     # y1
+            )
+            page.add_redact_annot(footer_top_rect, fill=(1, 1, 1))
 
-            # 반, 번호, 성명 정보 마스킹 (맨 아래 꼬리말)
-            # y: 800px (0.985) 정도의 좁은 영역
-            # 텍스트 검색으로 학교 이름을 지웠을 경우 남아있는 반/번호/성명 정보만 지움
-            rect_footer_large_info = fitz.Rect(page_width * 0.5, page_height * 0.97, page_width, page_height * 0.985)
-            page.add_redact_annot(rect_footer_large_info, fill=(1, 1, 1))
+            # 2) 맨 아래 큰 글씨 (반, 번호, 성명)
+            footer_bottom_rect = fitz.Rect(
+                page_width * 0.55,      # x0 - 중간 우측부터
+                page_height * 0.978,    # y0
+                page_width,             # x1 - 우측 끝까지
+                page_height * 0.995     # y1
+            )
+            page.add_redact_annot(footer_bottom_rect, fill=(1, 1, 1))
 
             # 실제 리댁션 적용 (내용 제거)
             page.apply_redactions()
@@ -108,7 +120,6 @@ def redact_sensitive_info(input_pdf_bytes):
 
     except Exception as e:
         st.error(f"PDF 처리 중 오류가 발생했습니다: {e}")
-        # 오류 발생 시 원본 바이트 반환 (또는 None)
         return None
 
 
