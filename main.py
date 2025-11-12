@@ -18,34 +18,66 @@ def redact_sensitive_info(input_pdf_bytes):
         for page_num in range(page_count):
             page = doc[page_num]
 
-            # --- 1페이지 특정 영역 마스킹 (사용자 지정 비율 좌표) ---
+            # --- 1페이지 특정 영역 마스킹 (표 내용은 삭제, 표 구조는 유지) ---
             if page_num == 0:
-                # 상단 표와 사진 영역만 제거 (제목은 제외, 약 12%~25%)
-                rect1 = fitz.Rect(0, page.rect.height * 0.12, page.rect.width, page.rect.height * 0.25)
-                page.add_redact_annot(rect1, fill=(1, 1, 1))
+                # 1. 상단 표: 반, 번호, 담임성명, 사진 내용만 제거
+                # 사진 영역 (좌표는 30713 박지호.pdf 기준, 폭이 좁은 영역)
+                # x0=60, y0=60, x1=160, y1=180
+                photo_rect = fitz.Rect(page.rect.width * 0.12, page.rect.height * 0.07, page.rect.width * 0.3, page.rect.height * 0.22)
+                page.add_redact_annot(photo_rect, fill=(1, 1, 1))
+
+                # 반/번호/담임성명 (내용이 들어가는 우측 영역만 제거)
+                # y-axis for 1, 2, 3학년
+                y_start = page.rect.height * 0.12  # 약 12%
+                y_end = page.rect.height * 0.21   # 약 21%
+                x_start = page.rect.width * 0.45  # 내용 시작점 (예상)
+                x_end = page.rect.width * 0.9     # 끝까지
                 
-                # "1. 인적·학적사항" 섹션 제거 (대략적 위치 25%~45%)
-                rect2 = fitz.Rect(0, page.rect.height * 0.25, page.rect.width, page.rect.height * 0.45)
-                page.add_redact_annot(rect2, fill=(1, 1, 1))
+                rect_top_table_content = fitz.Rect(x_start, y_start, x_end, y_end)
+                page.add_redact_annot(rect_top_table_content, fill=(1, 1, 1))
+                
+                
+                # 2. 1. 인적·학적사항 표 내용만 제거
+                # 성명, 성별, 주민등록번호, 주소, 학적사항, 특기사항의 "내용"이 들어가는 부분
+                # 왼쪽 레이블('성명', '주소' 등)은 그대로 두고, 오른쪽 데이터 필드만 제거
+
+                # '학생정보' 및 '주소' 내용 영역
+                y_info_start = page.rect.height * 0.24 # 약 24%
+                y_info_end = page.rect.height * 0.31  # 약 31%
+                x_content_start = page.rect.width * 0.25 # 내용 시작점
+                x_content_end = page.rect.width * 0.9   # 끝까지
+
+                rect_info_content = fitz.Rect(x_content_start, y_info_start, x_content_end, y_info_end)
+                page.add_redact_annot(rect_info_content, fill=(1, 1, 1))
+                
+                # '학적사항' 내용 영역
+                y_h_start = page.rect.height * 0.32
+                y_h_end = page.rect.height * 0.40
+                rect_h_content = fitz.Rect(x_content_start, y_h_start, x_content_end, y_h_end)
+                page.add_redact_annot(rect_h_content, fill=(1, 1, 1))
+
+                # '특기사항' 내용 영역
+                y_s_start = page.rect.height * 0.40
+                y_s_end = page.rect.height * 0.45
+                rect_s_content = fitz.Rect(x_content_start, y_s_start, x_content_end, y_s_end)
+                page.add_redact_annot(rect_s_content, fill=(1, 1, 1))
 
             # --- "고등학교" 키워드 검색 및 마스킹 ---
-            # (이 부분은 사용자 요청대로 완벽하게 유지됩니다)
-            # "(  )고등학교" 또는 "대성고등학교" 등 구체적인 학교 이름
-            # 예시 파일의 "대성고등학교"를 기준으로 검색
-            # 1~2페이지 수상경력, 5~6페이지 봉사활동, 모든 페이지 하단
+            # (요청대로 이 부분은 유지됩니다. 학교 이름 텍스트 자체를 찾아서 제거)
+            # 1~2페이지 수상경력, 5~6페이지 봉사활동, 모든 페이지 하단에 위치한 학교 이름 제거
             
             # 검색할 텍스트 리스트
             search_texts = ["대성고등학교", "상명대학교사범대학부속여자고등학교"] 
             
             for text in search_texts:
+                # 텍스트를 찾아 해당 영역을 마스킹합니다.
                 text_instances = page.search_for(text)
                 for inst in text_instances:
                     page.add_redact_annot(inst, fill=(1, 1, 1))
 
-            # --- 모든 페이지 하단 꼬리말 제거 (사용자 지정 비율 좌표, 하단 8%) ---
-            rect_footer = fitz.Rect(0, page.rect.height * 0.92, page.rect.width, page.rect.height)
-            page.add_redact_annot(rect_footer, fill=(1, 1, 1))
-
+            # --- 모든 페이지 하단 꼬리말 제거 (삭제 요청이 있었으나, '그대로 둔다'로 최종 요청 변경) ---
+            # 맨 하단 꼬리말 제거 코드는 최종 요청에 따라 삭제합니다.
+            
             # 실제 리댁션 적용 (내용 제거)
             page.apply_redactions()
 
