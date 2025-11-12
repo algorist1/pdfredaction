@@ -96,7 +96,9 @@ def redact_sensitive_info(input_pdf_bytes: bytes) -> bytes | None:
     - 1페이지 첫 표: '반/번호/담임성명' 내용만 삭제(테두리/중간선 보존)
     - 1페이지 인적·학적사항: 학생정보(성명/성별/주민등록번호/주소) 내용만 삭제
     - 1페이지 학적사항: 두 줄 연도(예: 2023) 포함 내용 전체 삭제(‘202’ 잔여 방지 강화)
-    - '(고등학교)' 검색 마스킹 + 모든 페이지 하단(날짜/반·번호·성명) 내용만 삭제, 페이지 표기(예: 1 / 16)는 보존
+    - '(고등학교)' 검색 마스킹 + 모든 페이지 하단:
+        · 하단 표/날짜/이름 전체 삭제(표선까지 포함, 즉 완전 제거)
+        · 단, '페이지수(예: 1 / 16)'만 정확히 보존
     """
     try:
         doc = fitz.open(stream=input_pdf_bytes, filetype="pdf")
@@ -207,7 +209,6 @@ def redact_sensitive_info(input_pdf_bytes: bytes) -> bytes | None:
                     numeric_words = [w for w in acad_words if re.fullmatch(r"\d{1,4}", str(w[4]).strip())]
                     if numeric_words:
                         num_line_rects = union_rect_of_words(numeric_words)
-                        # 좌우 여유 3배(0.003), 상하 trim은 동일
                         num_line_rects = [border_safe_trim(r, pw, ph, pad_lr=0.0030, trim_tb=0.0028) for r in num_line_rects]
                         redact_rects(page, num_line_rects)
 
@@ -219,41 +220,52 @@ def redact_sensitive_info(input_pdf_bytes: bytes) -> bytes | None:
                 except Exception:
                     pass
 
-            # ---------------- C. 모든 페이지 하단: 날짜/이름 삭제 + 페이지표기 보존 ----------------
-            # (0) 최상단 얇은 머리글은 유지(기존과 동일)
-            page.add_redact_annot(fitz.Rect(0, 0, pw, ph * 0.015), fill=(1, 1, 1))
+            # ---------------- C. 모든 페이지 하단: 표/날짜/이름 완전 삭제 + 페이지수 보존 ----------------
+            # 하단 밴드 범위(표 전체와 날짜가 들어오는 높이를 넉넉하게 포함)
+            band_y0 = ph * 0.93
+            band_y1 = ph * 1.00
 
-            # (1) 하단 6%에서 단어 수집(날짜, 반/번호/성명, 이름 포함 전부 수집)
-            FOOT_Y0 = ph * 0.94
-            fwords = words_in_range(page, FOOT_Y0, ph)
+            # (1) 하단 단어 수집
+            fwords = words_in_range(page, band_y0, band_y1)
 
-            # (2) 보존해야 하는 토큰: '/'와 같은 줄의 좌/우 숫자(최대 각각 2개까지)
-            keep_idxs = set()
+            # (2) '페이지수' 보존: 슬래시('/')와 같은 줄의 좌/우 숫자(최대 각 1개)만 보존
+            keep_rect = None
             for i, w in enumerate(fwords):
                 if str(w[4]).strip() == "/":
-                    # 슬래시는 보존
-                    keep_idxs.add(i)
-                    # 같은 라인(세로 위치 근접)에서 좌/우 숫자 보존
-                    same_line = [ (j, w2) for j, w2 in enumerate(fwords)
-                                  if j != i and abs(w2[1] - w[1]) < 3.0 and re.fullmatch(r"\d+", str(w2[4]).strip()) ]
-                    # 슬래시 중심과의 x 거리 기준으로 가까운 숫자 최대 2개씩 선택
                     sx = (w[0] + w[2]) / 2
-                    same_line.sort(key=lambda t: abs(((t[1][0] + t[1][2]) / 2) - sx))
-                    # 좌우에서 각각 1개씩 우선 보존
-                    left = [j for j, ww in same_line if ((ww[0] + ww[2]) / 2) < sx]
-                    right = [j for j, ww in same_line if ((ww[0] + ww[2]) / 2) >= sx]
-                    if left:
-                        keep_idxs.add(left[0])
+                    same_line_nums = [ww for ww in fwords if abs(ww[1] - w[1]) < 3.0 and re.fullmatch(r"\d+", str(ww[4]).strip())]
+                    # 슬래시와 x-거리 가까운 순서로 정렬
+                    same_line_nums.sort(key=lambda ww: abs(((ww[0] + ww[2]) / 2) - sx))
+                    left = [ww for ww in same_line_nums if ((ww[0] + ww[2]) / 2) < sx]
+                    right = [ww for ww in same_line_nums if ((ww[0] + ww[2]) / 2) >= sx]
+                    keep = [left[0]] if left else []
                     if right:
-                        keep_idxs.add(right[0])
+                        keep.append(right[0])
+                    keep.append(w)  # 슬래시 자체
+                    # 보존 bbox 결합
+                    xs0 = [r[0] for r in keep]; ys0 = [r[1] for r in keep]
+                    xs1 = [r[2] for r in keep]; ys1 = [r[3] for r in keep]
+                    # 좌우/상하에 아주 소폭 여유를 둬서 페이지수만 안전 보존
+                    margin_x = pw * 0.006
+                    margin_y = ph * 0.004
+                    keep_rect = fitz.Rect(min(xs0) - margin_x, min(ys0) - margin_y,
+                                          max(xs1) + margin_x, max(ys1) + margin_y)
+                    break  # 첫 번째 슬래시 기준으로 보존
 
-            # (3) 타겟(=삭제): keep을 제외한 모든 하단 단어
-            targets = [w for idx, w in enumerate(fwords) if idx not in keep_idxs]
-
-            # (4) 타겟을 라인 단위로 묶어 선보존 트림 후 마스킹
-            t_rects = union_rect_of_words(targets)
-            t_rects = [border_safe_trim(r, pw, ph, pad_lr=0.0016, trim_tb=0.0032) for r in t_rects]
-            redact_rects(page, t_rects)
+            # (3) 하단 밴드 전체를 두 개의 큰 직사각형으로 리댁션(보존 영역을 피해서 덮기)
+            if keep_rect is not None:
+                # 왼쪽 영역
+                left_rect = fitz.Rect(0, band_y0, max(keep_rect.x0, 0), band_y1)
+                # 오른쪽 영역
+                right_rect = fitz.Rect(min(keep_rect.x1, pw), band_y0, pw, band_y1)
+                # 표선까지 완전히 지우기 위해 아주 소폭 위로 확장
+                expand = ph * 0.002
+                left_rect = fitz.Rect(left_rect.x0, max(0, left_rect.y0 - expand), left_rect.x1, min(band_y1, left_rect.y1 + expand))
+                right_rect = fitz.Rect(right_rect.x0, max(0, right_rect.y0 - expand), right_rect.x1, min(band_y1, right_rect.y1 + expand))
+                redact_rects(page, [left_rect, right_rect])
+            else:
+                # 슬래시(페이지수)를 찾지 못한 경우: 하단 전부 제거
+                redact_rects(page, [fitz.Rect(0, band_y0, pw, band_y1)])
 
             # 실제 적용
             page.apply_redactions()
@@ -270,7 +282,7 @@ def redact_sensitive_info(input_pdf_bytes: bytes) -> bytes | None:
 # -------------------- Streamlit UI --------------------
 st.set_page_config(page_title="PDF 개인정보 보호 앱", page_icon="🔒")
 st.title("🔒 PDF 민감정보 마스킹 앱")
-st.write("표 선은 유지하고, 인적·학적사항(연도 포함)과 하단(날짜/반·번호·성명)의 '내용만' 마스킹합니다. 페이지 표기(예: 1 / 16)는 유지합니다.")
+st.write("상단 표/인적·학적사항(연도 포함)과 하단(표·날짜·이름)은 완전히 삭제하고, 페이지수(예: 1 / 16)만 남깁니다.")
 uploaded_file = st.file_uploader("PDF 파일 업로드", type=["pdf"])
 
 if uploaded_file:
