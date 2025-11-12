@@ -83,8 +83,8 @@ with st.expander("ℹ 자동으로 제거되는 정보", expanded=True):
 uploaded_file = st.file_uploader(
     "PDF 파일을 업로드하세요",
     type=['pdf'],
-    help="파일 크기 제한: 200MB"
-)if uploaded_file is not None:
+    help="파일 크기 제한: 200MB")
+if uploaded_file is not None:
     # 파일 정보 표시
     st.success(f"✅ {uploaded_file.name} ({uploaded_file.size / 1024 / 1024:.2f} MB)")
     
