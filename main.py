@@ -218,7 +218,7 @@ def redact_sensitive_info(input_pdf_bytes: bytes) -> bytes | None:
                         redact_rects(page, yr_rects)
 
             # ---------------- B. "(고등학교)" 등 검색 마스킹(유지) ----------------
-            for t in ["대성고등학교", "상명대학교사범대학부속여자고등학교", "(", "고등학교"]:
+            for t in ["대성고등학교", "상명대학교사범대학부속여자고등학교", "고등학교"]:
                 try:
                     for inst in page.search_for(t):
                         page.add_redact_annot(inst, fill=(1, 1, 1))
