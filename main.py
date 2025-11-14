@@ -7,7 +7,7 @@ from typing import List, Tuple
 # -------------------- 유틸 --------------------
 def border_safe_trim(rect: fitz.Rect, pw: float, ph: float,
                      pad_lr: float = 0.0010,   # 좌우 소폭 확장(글자 잔여 제거)
-                     trim_tb: float = 0.0095   # 상하 크게 깎아 가로선 보존
+                     trim_tb: float = 0.0010   # 상하 크게 깎아 가로선 보존
                      ) -> fitz.Rect:
     """표 선을 건드리지 않도록, 위아래를 줄이고 좌우를 아주 살짝 늘린 사각형 반환."""
     dx = pw * pad_lr
@@ -223,7 +223,7 @@ def redact_sensitive_info(input_pdf_bytes: bytes) -> bytes | None:
                         y0 = r.y0 + ph * 0.0015   # 위/아래 살짝 깎아 가로선 보호
                         y1 = r.y1 - ph * 0.0015
                         x0 = lab_acad.x1 + pw * 0.0005          # 라벨 바로 오른쪽부터
-                        x1 = min(pw * 0.975, r.x1 + pw * 0.02)  # 마지막 글자보다 2% 더, 단 표선 안전선 0.975 이내
+                        x1 = min(pw * 0.975, r.x1 + pw * 0.10)  # 마지막 글자보다 2% 더, 단 표선 안전선 0.975 이내
                         if y1 > y0 and x1 > x0:
                             hard_rects.append(fitz.Rect(x0, y0, x1, y1))
                     redact_rects(page, hard_rects)
