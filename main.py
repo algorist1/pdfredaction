@@ -192,29 +192,31 @@ def redact_sensitive_info(input_pdf_bytes: bytes) -> bytes | None:
                     addr_rects = [border_safe_trim(r, pw, ph) for r in addr_rects]
                     redact_rects(page, addr_rects)
 
-                # ★★★ 학적사항 영역: 좌표로 확실하게 삭제 (표 테두리 보존) ★★★
+                # ★★★ 학적사항 영역: 내용만 삭제, 표선 완전 보존 ★★★
                 if lab_acad:
-                    # 학적사항 행의 y좌표
-                    y_top = lab_acad.y0 - ph * 0.003
-                    
-                    # 특기사항이 있으면 그 위까지, 없으면 섹션2까지
+                    # 학적사항 영역의 y 범위
+                    y_top = lab_acad.y0 - ph * 0.002
                     if lab_extra:
-                        y_bot = lab_extra.y0 + ph * 0.003
+                        y_bot = lab_extra.y0 + ph * 0.002
                     else:
                         y_bot = (title_2.y0 - ph * 0.01) if title_2 else y1_bot
                     
-                    # x좌표: 라벨 셀 오른쪽 경계(세로선) 직후부터 시작
-                    x_left = pw * 0.135   # 왼쪽 세로선 직후 (라벨 셀 끝)
-                    x_right = pw * 0.973  # 우측 세로선 직전
+                    # 학적사항 라벨 오른쪽 영역의 모든 단어 수집
+                    acad_words = words_in_range(page, y_top, y_bot, x_min=lab_acad.x1 + pw * 0.001)
                     
-                    # 해당 영역 전체를 흰색으로 덮기
-                    cover_rect = fitz.Rect(
-                        x_left,
-                        y_top + ph * 0.0035,   # 상단 가로선 보존
-                        x_right,
-                        y_bot - ph * 0.0035    # 하단 가로선 보존
-                    )
-                    page.add_redact_annot(cover_rect, fill=(1, 1, 1))
+                    if acad_words:
+                        # 각 줄별로 그룹화하여 bbox 생성
+                        line_rects = union_rect_of_words(acad_words, x_min=lab_acad.x1 + pw * 0.001)
+                        
+                        # 각 줄을 개별적으로 마스킹 (표선 보존)
+                        for r in line_rects:
+                            safe_r = fitz.Rect(
+                                r.x0 - pw * 0.003,      # 좌측 여유
+                                r.y0 + ph * 0.0020,     # 상단 trim (가로선 보존)
+                                r.x1 + pw * 0.005,      # 우측 여유 (숫자 완전 삭제)
+                                r.y1 - ph * 0.0020      # 하단 trim (가로선 보존)
+                            )
+                            page.add_redact_annot(safe_r, fill=(1, 1, 1))
 
             # ---------------- B. 고등학교 검색 마스킹 ----------------
             for t in ["대성고등학교", "상명대학교사범대학부속여자고등학교", "고등학교"]:
