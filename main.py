@@ -1,313 +1,228 @@
 import streamlit as st
 import fitz  # PyMuPDF
-import re
-from typing import List, Tuple
+import io
 
-
-# -------------------- 유틸 --------------------
-def border_safe_trim(rect: fitz.Rect, pw: float, ph: float,
-                     pad_lr: float = 0.0010,
-                     trim_tb: float = 0.0050) -> fitz.Rect:
-    """표 선을 건드리지 않도록, 위아래를 줄이고 좌우를 아주 살짝 늘린 사각형 반환."""
-    dx = pw * pad_lr
-    dy = ph * trim_tb
-    x0 = rect.x0 - dx
-    x1 = rect.x1 + dx
-    y0 = rect.y0 + dy
-    y1 = rect.y1 - dy
-    if y1 <= y0:
-        mid = (rect.y0 + rect.y1) / 2
-        y0, y1 = mid - 0.15, mid + 0.15
-    return fitz.Rect(x0, y0, x1, y1)
-
-
-def inflate(rect: fitz.Rect, dx: float, dy: float) -> fitz.Rect:
-    """선이 없는 영역(예: 사진)에서 여유를 주는 확장."""
-    return fitz.Rect(rect.x0 - dx, rect.y0 - dy, rect.x1 + dx, rect.y1 + dy)
-
-
-def redact_rects(page: fitz.Page, rects: List[fitz.Rect], fill=(1, 1, 1)):
-    for r in rects:
-        page.add_redact_annot(r, fill=fill)
-
-
-def search_single_bbox(page: fitz.Page, text: str) -> fitz.Rect | None:
-    hits = page.search_for(text, hit_max=64)
-    if not hits:
-        return None
-    hits = sorted(hits, key=lambda r: (r.y0, r.x0))
-    return hits[0]
-
-
-def words_in_range(
-    page: fitz.Page, y0: float, y1: float, x_min: float | None = None, x_max: float | None = None
-) -> List[Tuple[float, float, float, float, str]]:
+def redact_pdf(pdf_bytes):
     """
-    y 대역(필수) + 선택적 x 대역에 들어오는 단어 목록 반환.
-    반환: (x0, y0, x1, y1, text)
+    PDF에서 개인정보를 삭제(흰색 사각형으로 덮기)하는 함수
+    
+    Args:
+        pdf_bytes: 업로드된 PDF 파일의 바이트 데이터
+    
+    Returns:
+        처리된 PDF 파일의 바이트 데이터
     """
-    words = page.get_text("words")
-    out: List[Tuple[float, float, float, float, str]] = []
-    for w in words:
-        x0, y0w, x1, y1w, txt = w[0], w[1], w[2], w[3], w[4]
-        if (y1w >= y0) and (y0w <= y1):
-            if (x_min is None or x1 >= x_min) and (x_max is None or x0 <= x_max):
-                if str(txt).strip():
-                    out.append((x0, y0w, x1, y1w, txt))
-    return out
+    # PDF 문서 열기
+    pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
+    total_pages = len(pdf_document)
+    
+    # ========================================
+    # 텍스트 검색 기반 삭제 규칙
+    # ========================================
+    # 모든 페이지에서 특정 문구 검색 및 덮기
+    search_text = "고등학교"  # 검색할 텍스트
+    
+    for page_num in range(total_pages):
+        page = pdf_document[page_num]
+        
+        # 1~2페이지(수상경력), 5~6페이지(봉사활동), 모든 페이지 하단에서 학교명 삭제
+        if page_num in [0, 1, 4, 5] or True:  # 실제로는 모든 페이지 처리
+            # 텍스트 검색
+            text_instances = page.search_for(search_text)
+            
+            for inst in text_instances:
+                # 검색된 텍스트 영역의 좌표
+                x0, y0, x1, y1 = inst
+                
+                # 학교명 앞뒤로 약간의 여백을 포함하여 덮기
+                # "대성고등학교", "○○고등학교" 등 다양한 형태 처리
+                padding = 50  # 좌우 여백 (학교명 전체를 덮기 위해)
+                
+                # 흰색 사각형으로 덮기
+                rect = fitz.Rect(x0 - padding, y0 - 2, x1 + padding, y1 + 2)
+                
+                # 페이지 하단 영역인지 확인 (y 좌표가 페이지 높이의 90% 이상)
+                page_height = page.rect.height
+                if y0 > page_height * 0.9:
+                    # 하단 영역이면 더 넓게 덮기 (반, 번호, 성명 포함)
+                    rect = fitz.Rect(50, y0 - 10, page.rect.width - 50, y1 + 10)
+                
+                # 흰색 사각형 그리기
+                shape = page.new_shape()
+                shape.draw_rect(rect)
+                shape.finish(color=(1, 1, 1), fill=(1, 1, 1))  # 흰색 채우기
+                shape.commit()
+    
+    # ========================================
+    # 좌표 기반 영역 삭제 규칙
+    # ========================================
+    
+    # 1페이지: 상단 첫 번째 표 (반, 번호, 담임성명, 사진)
+    if total_pages >= 1:
+        page = pdf_document[0]
+        page_width = page.rect.width
+        page_height = page.rect.height
+        
+        # 첫 번째 표의 데이터 영역 (표 테두리는 유지)
+        # 실제 좌표는 PDF 구조에 따라 조정 필요
+        first_table_areas = [
+            fitz.Rect(page_width * 0.15, page_height * 0.08, 
+                     page_width * 0.35, page_height * 0.12),  # 반/번호
+            fitz.Rect(page_width * 0.35, page_height * 0.08,
+                     page_width * 0.60, page_height * 0.12),  # 담임성명
+            fitz.Rect(page_width * 0.85, page_height * 0.06,
+                     page_width * 0.97, page_height * 0.13),  # 사진
+        ]
+        
+        shape = page.new_shape()
+        for rect in first_table_areas:
+            shape.draw_rect(rect)
+        shape.finish(color=(1, 1, 1), fill=(1, 1, 1))
+        shape.commit()
+        
+        # 두 번째 표: 1. 인적·학적사항
+        personal_info_areas = [
+            # 성명, 성별, 주민등록번호 행
+            fitz.Rect(page_width * 0.15, page_height * 0.165,
+                     page_width * 0.95, page_height * 0.195),
+            # 주소 행
+            fitz.Rect(page_width * 0.15, page_height * 0.195,
+                     page_width * 0.95, page_height * 0.225),
+            # 학적사항 영역
+            fitz.Rect(page_width * 0.15, page_height * 0.23,
+                     page_width * 0.95, page_height * 0.27),
+            # 특기사항 영역
+            fitz.Rect(page_width * 0.15, page_height * 0.28,
+                     page_width * 0.95, page_height * 0.35),
+        ]
+        
+        shape = page.new_shape()
+        for rect in personal_info_areas:
+            shape.draw_rect(rect)
+        shape.finish(color=(1, 1, 1), fill=(1, 1, 1))
+        shape.commit()
+    
+    # 모든 페이지 하단: 반, 번호, 성명 표 전체 삭제 (페이지 번호 제외)
+    for page_num in range(total_pages):
+        page = pdf_document[page_num]
+        page_width = page.rect.width
+        page_height = page.rect.height
+        
+        # 하단 표 영역 (페이지 번호는 중앙에 있으므로 좌우로 나눠서 처리)
+        # 좌측 영역
+        left_rect = fitz.Rect(0, page_height * 0.95, 
+                             page_width * 0.35, page_height)
+        # 우측 영역  
+        right_rect = fitz.Rect(page_width * 0.65, page_height * 0.95,
+                              page_width, page_height)
+        
+        shape = page.new_shape()
+        shape.draw_rect(left_rect)
+        shape.draw_rect(right_rect)
+        shape.finish(color=(1, 1, 1), fill=(1, 1, 1))
+        shape.commit()
+    
+    # 수정된 PDF를 바이트로 저장
+    output_bytes = pdf_document.write()
+    pdf_document.close()
+    
+    return output_bytes
 
 
-def union_rect_of_words(
-    words: List[Tuple[float, float, float, float, str]], x_min: float | None = None, x_max: float | None = None
-) -> List[fitz.Rect]:
-    """같은 줄 단어들을 묶어 최소 bbox 리스트 생성."""
-    if not words:
-        return []
-    words = sorted(words, key=lambda w: (round(w[1], 1), w[0]))
-    lines: List[List[Tuple[float, float, float, float, str]]] = []
-    for w in words:
-        placed = False
-        for line in lines:
-            if abs(line[0][1] - w[1]) < 2.5:
-                line.append(w); placed = True; break
-        if not placed:
-            lines.append([w])
-
-    rects: List[fitz.Rect] = []
-    for line in lines:
-        xs0 = [w[0] for w in line]; ys0 = [w[1] for w in line]
-        xs1 = [w[2] for w in line]; ys1 = [w[3] for w in line]
-        r = fitz.Rect(min(xs0), min(ys0), max(xs1), max(ys1))
-        if x_min is not None or x_max is not None:
-            clip_x0 = r.x0 if x_min is None else max(r.x0, x_min)
-            clip_x1 = r.x1 if x_max is None else min(r.x1, x_max)
-            if clip_x1 > clip_x0:
-                r = fitz.Rect(clip_x0, r.y0, clip_x1, r.y1)
-            else:
-                continue
-        rects.append(r)
-    return rects
-
-
-# -------------------- 핵심 처리 --------------------
-def redact_sensitive_info(input_pdf_bytes: bytes) -> bytes | None:
-    """
-    - 1페이지 첫 표: '반/번호/담임성명' 내용만 삭제(테두리/중간선 보존)
-    - 1페이지 인적·학적사항: 학생정보 내용만 삭제
-    - 1페이지 학적사항: 두 줄 연도(예: 202) 포함 내용 전체 삭제(표선 보존, '202' 완전제거)
-    - 모든 페이지 하단: 표/날짜/이름 완전 삭제, 페이지수만 보존
-    """
-    try:
-        doc = fitz.open(stream=input_pdf_bytes, filetype="pdf")
-        page_count = min(doc.page_count, 23)
-
-        for page_num in range(page_count):
-            page = doc[page_num]
-            pw, ph = page.rect.width, page.rect.height
-
-            # ---------------- A. 1페이지 ----------------
-            if page_num == 0:
-                # --- A1) 첫 표 열 경계 ---
-                hdr_ban = search_single_bbox(page, "반")
-                hdr_beonho = search_single_bbox(page, "번호")
-                hdr_damim = search_single_bbox(page, "담임성명")
-                top_anchor = search_single_bbox(page, "학년")
-                sec1 = search_single_bbox(page, "1.")
-                table_y_top = top_anchor.y0 if top_anchor else ph * 0.17
-                table_y_bottom = (sec1.y0 - ph * 0.01) if sec1 else ph * 0.35
-
-                x_ban = hdr_ban.x0 if hdr_ban else pw * 0.52
-                x_beonho = hdr_beonho.x0 if hdr_beonho else pw * 0.63
-                x_damim = hdr_damim.x0 if hdr_damim else pw * 0.75
-                x_right = pw * 0.985
-
-                words = words_in_range(page, table_y_top, table_y_bottom)
-
-                # 반 열
-                w_ban = [w for w in words if w[0] >= x_ban - pw*0.006 and w[2] <= x_beonho - pw*0.004]
-                r_ban = union_rect_of_words(w_ban, x_min=x_ban + pw*0.002, x_max=x_beonho - pw*0.003)
-
-                # 번호 열
-                w_no = [w for w in words if w[0] >= x_beonho - pw*0.006 and w[2] <= x_damim - pw*0.004]
-                r_no = union_rect_of_words(w_no, x_min=x_beonho + pw*0.002, x_max=x_damim - pw*0.003)
-
-                # 담임성명 열
-                w_dm = [w for w in words if w[0] >= x_damim - pw*0.006]
-                r_dm = union_rect_of_words(w_dm, x_min=x_damim + pw*0.002, x_max=x_right - pw*0.003)
-
-                safe_rects = [border_safe_trim(r, pw, ph) for r in (r_ban + r_no + r_dm)]
-                redact_rects(page, safe_rects)
-
-                # --- A2) 사진 ---
-                raw = page.get_text("rawdict")
-                imgs: List[fitz.Rect] = []
-                for blk in raw.get("blocks", []):
-                    if blk.get("type") == 1 or "image" in blk:
-                        x0, y0, x1, y1 = blk["bbox"]
-                        r = fitz.Rect(x0, y0, x1, y1)
-                        if r.y0 < ph * 0.40:
-                            imgs.append(r)
-                if imgs:
-                    imgs.sort(key=lambda r: (r.x0, (r.width * r.height)), reverse=True)
-                    page.add_redact_annot(inflate(imgs[0], pw*0.004, ph*0.004), fill=(1, 1, 1))
-
-                # --- A3) 1. 인적·학적사항 ---
-                title_1 = search_single_bbox(page, "1.")
-                title_2 = search_single_bbox(page, "2.")
-                y1_top = title_1.y0 if title_1 else ph * 0.42
-                y1_bot = (title_2.y0 - ph * 0.01) if title_2 else ph * 0.74
-
-                lab_name = search_single_bbox(page, "성명")
-                lab_gender = search_single_bbox(page, "성별")
-                lab_rrn = search_single_bbox(page, "주민등록번호")
-                lab_addr = search_single_bbox(page, "주소")
-                lab_acad = search_single_bbox(page, "학적사항")
-                lab_extra = search_single_bbox(page, "특기사항")
-
-                # 학생정보 라인
-                if lab_name:
-                    y0, y1 = lab_name.y0 - ph*0.006, lab_name.y1 + ph*0.006
-                    line_words = words_in_range(page, y0, y1)
-                    rects = []
-                    if lab_name:
-                        rects += union_rect_of_words([w for w in line_words if w[0] > lab_name.x1 + pw*0.004],
-                                                     x_min=lab_name.x1 + pw*0.004)
-                    if lab_gender:
-                        rects += union_rect_of_words([w for w in line_words if w[0] > lab_gender.x1 + pw*0.004],
-                                                     x_min=lab_gender.x1 + pw*0.004)
-                    if lab_rrn:
-                        rects += union_rect_of_words([w for w in line_words if w[0] > lab_rrn.x1 + pw*0.004],
-                                                     x_min=lab_rrn.x1 + pw*0.004)
-                    rects = [border_safe_trim(r, pw, ph) for r in rects]
-                    redact_rects(page, rects)
-
-                # 주소 라인
-                if lab_addr:
-                    ay0, ay1 = lab_addr.y0 - ph*0.006, lab_addr.y1 + ph*0.006
-                    addr_words = words_in_range(page, ay0, ay1)
-                    addr_rects = union_rect_of_words(
-                        [w for w in addr_words if w[0] > lab_addr.x1 + pw*0.004],
-                        x_min=lab_addr.x1 + pw*0.004
-                    )
-                    addr_rects = [border_safe_trim(r, pw, ph) for r in addr_rects]
-                    redact_rects(page, addr_rects)
-
-                # ★★★ 학적사항 영역: 모든 문자 완전 삭제, 표선 보존 ★★★
-                if lab_acad:
-                    # 학적사항 영역의 y 범위
-                    y_top = lab_acad.y0 - ph * 0.003
-                    if lab_extra:
-                        y_bot = lab_extra.y0 + ph * 0.003
-                    else:
-                        y_bot = (title_2.y0 - ph * 0.01) if title_2 else y1_bot
-                    
-                    # 모든 문자 수집 (get_text("dict") 사용)
-                    text_dict = page.get_text("dict")
-                    chars_to_delete = []
-                    
-                    for block in text_dict.get("blocks", []):
-                        if block.get("type") == 0:  # 텍스트 블록
-                            for line in block.get("lines", []):
-                                for span in line.get("spans", []):
-                                    # span의 bbox와 각 문자 확인
-                                    span_bbox = span.get("bbox")
-                                    if span_bbox:
-                                        sx0, sy0, sx1, sy1 = span_bbox
-                                        # 학적사항 영역 내이고 라벨 오른쪽이면
-                                        if (sy0 >= y_top and sy1 <= y_bot and sx0 > lab_acad.x1):
-                                            # 개별 문자 정보가 있으면 사용
-                                            if "chars" in span:
-                                                for char in span["chars"]:
-                                                    c_bbox = char.get("bbox")
-                                                    if c_bbox:
-                                                        chars_to_delete.append(c_bbox)
-                                            else:
-                                                # 문자 정보 없으면 span 전체
-                                                chars_to_delete.append(span_bbox)
-                    
-                    # 수집된 모든 문자 bbox 삭제 (최소 확장)
-                    for bbox in chars_to_delete:
-                        cx0, cy0, cx1, cy1 = bbox
-                        char_rect = fitz.Rect(
-                            cx0 - pw * 0.0008,  # 좌측 미세 확장
-                            cy0 - ph * 0.0003,  # 상단 미세 확장
-                            cx1 + pw * 0.0020,  # 우측 확장 (완전 삭제)
-                            cy1 + ph * 0.0003   # 하단 미세 확장
-                        )
-                        page.add_redact_annot(char_rect, fill=(1, 1, 1))
-
-            # ---------------- B. 고등학교 검색 마스킹 ----------------
-            for t in ["대성고등학교", "상명대학교사범대학부속여자고등학교", "고등학교"]:
+def main():
+    """Streamlit 메인 애플리케이션"""
+    
+    st.set_page_config(
+        page_title="PDF 개인정보 보호",
+        page_icon="🔒",
+        layout="centered"
+    )
+    
+    st.title("🔒 PDF 개인정보 보호 도구")
+    st.markdown("""
+    이 앱은 학교생활기록부 등의 PDF 문서에서 개인정보를 자동으로 삭제합니다.
+    
+    **처리 항목:**
+    - 학교명 (표 내부 및 하단)
+    - 이름, 주민등록번호, 주소
+    - 반, 번호, 담임 교사명, 사진
+    
+    ⚠️ **주의:** 최대 23페이지까지 처리 가능합니다.
+    """)
+    
+    # 파일 업로드
+    uploaded_file = st.file_uploader(
+        "PDF 파일을 업로드하세요",
+        type=['pdf'],
+        help="학교생활기록부 PDF 파일 (최대 23페이지)"
+    )
+    
+    if uploaded_file is not None:
+        # 파일 정보 표시
+        st.info(f"📄 업로드된 파일: {uploaded_file.name}")
+        
+        # 처리 버튼
+        if st.button("🔒 개인정보 보호 처리 시작", type="primary"):
+            with st.spinner("처리 중입니다... 잠시만 기다려주세요."):
                 try:
-                    for inst in page.search_for(t):
-                        page.add_redact_annot(inst, fill=(1, 1, 1))
-                except Exception:
-                    pass
+                    # PDF 읽기
+                    pdf_bytes = uploaded_file.read()
+                    
+                    # 페이지 수 확인
+                    pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+                    num_pages = len(pdf_doc)
+                    pdf_doc.close()
+                    
+                    if num_pages > 23:
+                        st.error(f"❌ 페이지 수가 너무 많습니다. (현재: {num_pages}페이지, 최대: 23페이지)")
+                        return
+                    
+                    st.success(f"✅ PDF 문서 로드 완료 (총 {num_pages}페이지)")
+                    
+                    # 개인정보 삭제 처리
+                    redacted_pdf = redact_pdf(pdf_bytes)
+                    
+                    st.success("✅ 개인정보 보호 처리가 완료되었습니다!")
+                    
+                    # 다운로드 버튼
+                    st.download_button(
+                        label="📥 보호된 PDF 다운로드",
+                        data=redacted_pdf,
+                        file_name="private_protected_document.pdf",
+                        mime="application/pdf",
+                        type="primary"
+                    )
+                    
+                    st.info("💡 다운로드한 파일을 열어 개인정보가 제대로 삭제되었는지 확인하세요.")
+                    
+                except Exception as e:
+                    st.error(f"❌ 오류가 발생했습니다: {str(e)}")
+                    st.error("파일 형식이나 내용을 확인해주세요.")
+    
+    # 사용 방법 안내
+    with st.expander("ℹ️ 사용 방법"):
+        st.markdown("""
+        1. **PDF 파일 업로드**: 위의 파일 선택 버튼을 클릭하여 PDF를 업로드합니다.
+        2. **처리 시작**: "개인정보 보호 처리 시작" 버튼을 클릭합니다.
+        3. **다운로드**: 처리가 완료되면 "보호된 PDF 다운로드" 버튼이 나타납니다.
+        4. **확인**: 다운로드한 파일을 열어 개인정보가 제대로 삭제되었는지 확인합니다.
+        
+        **처리되는 정보:**
+        - ✅ 학교명 (텍스트 검색 방식)
+        - ✅ 개인 신상정보 (이름, 주민번호, 주소 등)
+        - ✅ 학급 정보 (반, 번호, 담임)
+        - ✅ 사진
+        """)
+    
+    # 주의사항
+    with st.expander("⚠️ 주의사항"):
+        st.markdown("""
+        - 이 도구는 자동화된 처리를 수행하므로, 반드시 결과물을 직접 확인하세요.
+        - PDF 구조가 예상과 다를 경우 일부 정보가 누락될 수 있습니다.
+        - 처리 전 원본 파일은 별도로 백업하는 것을 권장합니다.
+        - 민감한 개인정보가 포함된 문서는 안전하게 관리하세요.
+        """)
 
-            # ---------------- C. 하단 처리 ----------------
-            band_y0 = ph * 0.93
-            band_y1 = ph * 1.00
 
-            fwords = words_in_range(page, band_y0, band_y1)
-
-            keep_rect = None
-            for i, w in enumerate(fwords):
-                if str(w[4]).strip() == "/":
-                    sx = (w[0] + w[2]) / 2
-                    same_line_nums = [ww for ww in fwords if abs(ww[1] - w[1]) < 3.0 and re.fullmatch(r"\d+", str(ww[4]).strip())]
-                    same_line_nums.sort(key=lambda ww: abs(((ww[0] + ww[2]) / 2) - sx))
-                    left = [ww for ww in same_line_nums if ((ww[0] + ww[2]) / 2) < sx]
-                    right = [ww for ww in same_line_nums if ((ww[0] + ww[2]) / 2) >= sx]
-                    keep = [left[0]] if left else []
-                    if right:
-                        keep.append(right[0])
-                    keep.append(w)
-                    xs0 = [r[0] for r in keep]; ys0 = [r[1] for r in keep]
-                    xs1 = [r[2] for r in keep]; ys1 = [r[3] for r in keep]
-                    margin_x = pw * 0.006
-                    margin_y = ph * 0.004
-                    keep_rect = fitz.Rect(min(xs0) - margin_x, min(ys0) - margin_y,
-                                          max(xs1) + margin_x, max(ys1) + margin_y)
-                    break
-
-            if keep_rect is not None:
-                left_rect = fitz.Rect(0, band_y0, max(keep_rect.x0, 0), band_y1)
-                right_rect = fitz.Rect(min(keep_rect.x1, pw), band_y0, pw, band_y1)
-                expand = ph * 0.002
-                left_rect = fitz.Rect(left_rect.x0, max(0, left_rect.y0 - expand), left_rect.x1, min(band_y1, left_rect.y1 + expand))
-                right_rect = fitz.Rect(right_rect.x0, max(0, right_rect.y0 - expand), right_rect.x1, min(band_y1, right_rect.y1 + expand))
-                redact_rects(page, [left_rect, right_rect])
-            else:
-                redact_rects(page, [fitz.Rect(0, band_y0, pw, band_y1)])
-
-            page.apply_redactions()
-
-        out = doc.tobytes()
-        doc.close()
-        return out
-
-    except Exception as e:
-        st.error(f"PDF 처리 중 오류: {e}")
-        return None
-
-
-# -------------------- Streamlit UI --------------------
-st.set_page_config(page_title="PDF 개인정보 보호 앱", page_icon="🔒")
-st.title("🔒 PDF 민감정보 마스킹 앱")
-st.write("학적사항의 '202' 등 모든 내용을 완벽히 삭제하며, 표 테두리는 보존합니다.")
-uploaded_file = st.file_uploader("PDF 파일 업로드", type=["pdf"])
-
-if uploaded_file:
-    data = uploaded_file.getvalue()
-    with st.spinner("처리 중..."):
-        out = redact_sensitive_info(data)
-    if out:
-        st.success("✅ 완료!")
-        st.download_button(
-            "처리된 PDF 다운로드",
-            data=out,
-            file_name=uploaded_file.name.replace(".pdf", "_masked.pdf"),
-            mime="application/pdf",
-        )
-    else:
-        st.error("❌ 처리 중 오류가 발생했습니다.")
+if __name__ == "__main__":
+    main()
