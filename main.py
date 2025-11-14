@@ -203,17 +203,16 @@ def redact_sensitive_info(input_pdf_bytes: bytes) -> bytes | None:
                     else:
                         y_bot = (title_2.y0 - ph * 0.01) if title_2 else y1_bot
                     
-                    # x좌표: 학생정보 셀과 동일한 시작점 사용
-                    # "학적사항" 라벨은 왼쪽 셀에 있고, 내용은 오른쪽 큰 셀에 있음
-                    x_left = pw * 0.13   # 세로선 직후 (왼쪽 라벨 셀 끝)
-                    x_right = pw * 0.976  # 우측 세로선 직전
+                    # x좌표: 라벨 셀 오른쪽 경계(세로선) 직후부터 시작
+                    x_left = pw * 0.135   # 왼쪽 세로선 직후 (라벨 셀 끝)
+                    x_right = pw * 0.973  # 우측 세로선 직전
                     
                     # 해당 영역 전체를 흰색으로 덮기
                     cover_rect = fitz.Rect(
                         x_left,
-                        y_top + ph * 0.003,   # 상단 가로선 보존
+                        y_top + ph * 0.0035,   # 상단 가로선 보존
                         x_right,
-                        y_bot - ph * 0.003    # 하단 가로선 보존
+                        y_bot - ph * 0.0035    # 하단 가로선 보존
                     )
                     page.add_redact_annot(cover_rect, fill=(1, 1, 1))
 
