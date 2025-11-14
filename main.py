@@ -193,20 +193,25 @@ def redact_sensitive_info(input_pdf_bytes: bytes) -> bytes | None:
                     redact_rects(page, addr_rects)
 
                 # ★★★ 학적사항 영역: 좌표로 확실하게 삭제 (표 테두리 보존) ★★★
-                if lab_acad and lab_extra:
+                if lab_acad:
                     # 학적사항 셀의 정확한 좌표 계산
-                    y_top = lab_acad.y0 - ph * 0.001      # 라벨 상단
-                    y_bot = lab_extra.y0 + ph * 0.001     # 다음 라벨(특기사항) 상단
-                    x_left = lab_acad.x1 + pw * 0.003     # 라벨 바로 오른쪽 (세로선 보존)
-                    x_right = pw * 0.975                   # 우측 세로선 직전
+                    y_top = lab_acad.y0 - ph * 0.002      # 라벨 상단 약간 위
                     
-                    # 해당 영역의 모든 내용을 흰색으로 덮기
-                    # 단, 가로선 보존을 위해 상하를 약간 줄임
+                    # 특기사항이 있으면 그 위까지, 없으면 섹션2까지
+                    if lab_extra:
+                        y_bot = lab_extra.y0 + ph * 0.002
+                    else:
+                        y_bot = (title_2.y0 - ph * 0.005) if title_2 else y1_bot
+                    
+                    x_left = lab_acad.x1 + pw * 0.002     # 라벨 바로 오른쪽
+                    x_right = pw * 0.976                   # 우측 세로선 직전
+                    
+                    # 해당 영역 전체를 흰색으로 덮기 (가로선만 보존)
                     cover_rect = fitz.Rect(
                         x_left,
-                        y_top + ph * 0.002,   # 상단 가로선 보존
+                        y_top + ph * 0.0025,   # 상단 가로선 보존
                         x_right,
-                        y_bot - ph * 0.002    # 하단 가로선 보존
+                        y_bot - ph * 0.0025    # 하단 가로선 보존
                     )
                     page.add_redact_annot(cover_rect, fill=(1, 1, 1))
 
