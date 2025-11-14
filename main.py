@@ -223,7 +223,7 @@ def redact_sensitive_info(input_pdf_bytes: bytes) -> bytes | None:
                         y0 = r.y0 + ph * 0.0015   # 위/아래 살짝 깎아 가로선 보호
                         y1 = r.y1 - ph * 0.0015
                         x0 = lab_acad.x1 + pw * 0.0005          # 라벨 바로 오른쪽부터
-                        x1 = min(pw * 0.975, r.x1 + pw * 0.5)  # 마지막 글자보다 2% 더, 단 표선 안전선 0.975 이내
+                        x1 = min(pw * 0.975, r.x1 + pw * 0.02)  # 마지막 글자보다 2% 더, 단 표선 안전선 0.975 이내
                         if y1 > y0 and x1 > x0:
                             hard_rects.append(fitz.Rect(x0, y0, x1, y1))
                     redact_rects(page, hard_rects)
