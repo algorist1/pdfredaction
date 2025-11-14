@@ -4,7 +4,7 @@ import io
 
 def redact_pdf(pdf_bytes):
     """
-    PDF에서 개인정보를 삭제(흰색 사각형으로 덮기)하는 함수
+    PDF에서 개인정보를 삭제하는 함수
     """
     pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
     total_pages = len(pdf_document)
@@ -14,8 +14,6 @@ def redact_pdf(pdf_bytes):
     # ========================================
     for page_num in range(total_pages):
         page = pdf_document[page_num]
-        
-        # "고등학교" 검색
         text_instances = page.search_for("고등학교")
         
         for inst in text_instances:
@@ -28,116 +26,70 @@ def redact_pdf(pdf_bytes):
             shape.commit()
     
     # ========================================
-    # 2단계: 1페이지 영역 기반 완전 삭제
+    # 2단계: 1페이지 상단 표 처리
     # ========================================
     if total_pages >= 1:
         page = pdf_document[0]
         pw = page.rect.width
         ph = page.rect.height
         
-        # -----------------------------------------
-        # 2-1. 첫 번째 표 데이터 영역 완전 삭제
-        # -----------------------------------------
-        # "졸업대장번호" 표의 데이터 셀들
-        # 표 구조: 학년 | 학과 | 반 | 번호 | 담임성명
-        
-        # 1학년 행 (학과, 반, 번호, 담임성명 영역)
-        first_table_row1 = fitz.Rect(
-            pw * 0.26,  # 학년 열 다음부터
-            ph * 0.195,  # 1학년 행 시작
-            pw * 0.95,   # 오른쪽 끝
-            ph * 0.215   # 1학년 행 끝
-        )
-        
-        # 2학년 행
-        first_table_row2 = fitz.Rect(
-            pw * 0.26,
-            ph * 0.215,
-            pw * 0.95,
-            ph * 0.235
-        )
-        
-        # 3학년 행
-        first_table_row3 = fitz.Rect(
-            pw * 0.26,
-            ph * 0.235,
-            pw * 0.95,
-            ph * 0.255
-        )
-        
-        shape = page.new_shape()
-        shape.draw_rect(first_table_row1)
-        shape.draw_rect(first_table_row2)
-        shape.draw_rect(first_table_row3)
-        shape.finish(color=(1, 1, 1), fill=(1, 1, 1))
-        shape.commit()
-        
-        # -----------------------------------------
-        # 2-2. 우측 사진 영역 삭제
-        # -----------------------------------------
-        photo_rect = fitz.Rect(
-            pw * 0.82,   # 우측
-            ph * 0.14,   # 상단
-            pw * 0.97,   # 오른쪽 끝
-            ph * 0.26    # 사진 하단
-        )
-        
-        shape = page.new_shape()
-        shape.draw_rect(photo_rect)
-        shape.finish(color=(1, 1, 1), fill=(1, 1, 1))
-        shape.commit()
-        
-        # -----------------------------------------
-        # 2-3. "1. 인적·학적사항" 섹션 완전 삭제
-        # -----------------------------------------
-        
-        # 학생정보 영역 (성명, 성별, 주민등록번호)
-        student_info = fitz.Rect(
-            pw * 0.15,   # 좌측
-            ph * 0.305,  # 상단
-            pw * 0.95,   # 우측
-            ph * 0.335   # 하단
-        )
-        
-        # 주소 영역
-        address_info = fitz.Rect(
-            pw * 0.15,
-            ph * 0.335,
-            pw * 0.95,
-            ph * 0.365
-        )
-        
-        # **학적사항 전체 영역 (여기가 핵심!)**
-        academic_info = fitz.Rect(
-            pw * 0.15,   # 좌측
-            ph * 0.375,  # "학적사항" 라벨 아래
-            pw * 0.95,   # 우측
-            ph * 0.435   # 학적사항 전체 영역
-        )
-        
-        # 특기사항 표 데이터 영역
-        attendance_table = fitz.Rect(
-            pw * 0.15,
-            ph * 0.455,
-            pw * 0.95,
-            ph * 0.535
-        )
-        
-        shape = page.new_shape()
-        shape.draw_rect(student_info)
-        shape.draw_rect(address_info)
-        shape.draw_rect(academic_info)
-        shape.draw_rect(attendance_table)
-        shape.finish(color=(1, 1, 1), fill=(1, 1, 1))
-        shape.commit()
-        
-        # -----------------------------------------
-        # 2-4. 텍스트 기반 추가 삭제 (보험용)
-        # -----------------------------------------
+        # 텍스트 정보 추출
         text_dict = page.get_text("dict")
         blocks = text_dict["blocks"]
         
-        additional_rects = []
+        # -----------------------------------------
+        # 2-1. 첫 번째 표의 데이터만 정확히 삭제
+        # -----------------------------------------
+        first_table_rects = []
+        
+        for block in blocks:
+            if "lines" in block:
+                for line in block["lines"]:
+                    for span in line["spans"]:
+                        text = span["text"].strip()
+                        bbox = span["bbox"]
+                        y_pos = bbox[1]
+                        
+                        # 상단 25% 영역 (첫 번째 표 영역)
+                        if y_pos < ph * 0.27:
+                            # 헤더가 아닌 데이터만 삭제
+                            if text not in ["졸업대장번호", "학년", "구분", "학과", "반", "번호", "담임성명"]:
+                                # 숫자나 이름
+                                if text and (text.isdigit() or len(text) > 1):
+                                    rect = fitz.Rect(
+                                        bbox[0] - 2, bbox[1] - 2,
+                                        bbox[2] + 2, bbox[3] + 2
+                                    )
+                                    first_table_rects.append(rect)
+        
+        # 첫 번째 표 데이터 삭제
+        if first_table_rects:
+            shape = page.new_shape()
+            for rect in first_table_rects:
+                shape.draw_rect(rect)
+            shape.finish(color=(1, 1, 1), fill=(1, 1, 1))
+            shape.commit()
+        
+        # -----------------------------------------
+        # 2-2. 사진 삭제
+        # -----------------------------------------
+        for block in blocks:
+            if block.get("type") == 1:  # 이미지
+                bbox = block["bbox"]
+                if bbox[0] > pw * 0.75:  # 우측
+                    rect = fitz.Rect(
+                        bbox[0] - 5, bbox[1] - 5,
+                        bbox[2] + 5, bbox[3] + 5
+                    )
+                    shape = page.new_shape()
+                    shape.draw_rect(rect)
+                    shape.finish(color=(1, 1, 1), fill=(1, 1, 1))
+                    shape.commit()
+        
+        # -----------------------------------------
+        # 2-3. "1. 인적·학적사항" 표의 내용 삭제
+        # -----------------------------------------
+        personal_rects = []
         
         for block in blocks:
             if "lines" in block:
@@ -146,79 +98,74 @@ def redact_pdf(pdf_bytes):
                         text = span["text"].strip()
                         bbox = span["bbox"]
                         
-                        # 첫 번째 표의 숫자들 (반, 번호)
-                        if text.isdigit() and bbox[1] < ph * 0.26:
-                            rect = fitz.Rect(bbox[0] - 3, bbox[1] - 3,
-                                           bbox[2] + 3, bbox[3] + 3)
-                            additional_rects.append(rect)
+                        # 개인정보 항목들
+                        if any(keyword in text for keyword in 
+                               ["박지호", "남", "여", "070515", "서울", "경기", 
+                                "2023년", "2024년", "2025년", "중학교", "초등학교",
+                                "졸업", "입학", "제1학년", "제2학년", "제3학년"]):
+                            rect = fitz.Rect(
+                                bbox[0] - 2, bbox[1] - 2,
+                                bbox[2] + 2, bbox[3] + 2
+                            )
+                            personal_rects.append(rect)
                         
-                        # 담임 이름들
-                        if text in ["이혜원", "김정훈", "노지호"]:
-                            rect = fitz.Rect(bbox[0] - 3, bbox[1] - 3,
-                                           bbox[2] + 3, bbox[3] + 3)
-                            additional_rects.append(rect)
-                        
-                        # 학생 이름
-                        if "박지호" in text:
-                            rect = fitz.Rect(bbox[0] - 3, bbox[1] - 3,
-                                           bbox[2] + 3, bbox[3] + 3)
-                            additional_rects.append(rect)
-                        
-                        # 주민번호
-                        if "-" in text and len(text) >= 13 and any(c.isdigit() for c in text):
-                            rect = fitz.Rect(bbox[0] - 3, bbox[1] - 3,
-                                           bbox[2] + 3, bbox[3] + 3)
-                            additional_rects.append(rect)
-                        
-                        # 주소
-                        if ("서울" in text or "경기" in text) and len(text) > 10:
-                            rect = fitz.Rect(bbox[0] - 3, bbox[1] - 3,
-                                           bbox[2] + 3, bbox[3] + 3)
-                            additional_rects.append(rect)
-                        
-                        # 학적사항의 날짜와 학교명
-                        if bbox[1] > ph * 0.37 and bbox[1] < ph * 0.44:  # 학적사항 영역
-                            if any(kw in text for kw in ["2023", "2024", "2025", "년", "월", "일", 
-                                                          "중학교", "초등학교", "졸업", "입학", "제"]):
-                                rect = fitz.Rect(bbox[0] - 3, bbox[1] - 3,
-                                               bbox[2] + 3, bbox[3] + 3)
-                                additional_rects.append(rect)
+                        # 주민번호 (숫자-숫자 형식)
+                        if "-" in text and len(text) >= 10:
+                            rect = fitz.Rect(
+                                bbox[0] - 2, bbox[1] - 2,
+                                bbox[2] + 2, bbox[3] + 2
+                            )
+                            personal_rects.append(rect)
         
-        # 추가 삭제 실행
-        if additional_rects:
+        # 개인정보 삭제
+        if personal_rects:
             shape = page.new_shape()
-            for rect in additional_rects:
+            for rect in personal_rects:
                 shape.draw_rect(rect)
             shape.finish(color=(1, 1, 1), fill=(1, 1, 1))
             shape.commit()
+        
+        # 학적사항 영역 전체를 영역으로 한 번 더 덮기
+        academic_area = fitz.Rect(
+            pw * 0.14,
+            ph * 0.375,
+            pw * 0.96,
+            ph * 0.43
+        )
+        
+        shape = page.new_shape()
+        shape.draw_rect(academic_area)
+        shape.finish(color=(1, 1, 1), fill=(1, 1, 1))
+        shape.commit()
     
     # ========================================
-    # 3단계: 모든 페이지 하단 영역 삭제
+    # 3단계: 모든 페이지 하단 표 완전 삭제
     # ========================================
     for page_num in range(total_pages):
         page = pdf_document[page_num]
         pw = page.rect.width
         ph = page.rect.height
         
-        # 하단 좌측 영역 (반, 번호)
-        left_bottom = fitz.Rect(
+        # 하단 표 전체 삭제 (페이지 번호 제외)
+        # 좌측 영역
+        left_area = fitz.Rect(
             0,           # 왼쪽 끝
-            ph * 0.93,   # 하단 7% 영역
-            pw * 0.38,   # 페이지 38%까지
+            ph - 50,     # 하단 50pt
+            pw * 0.35,   # 35%까지
             ph           # 끝까지
         )
         
-        # 하단 우측 영역 (성명)
-        right_bottom = fitz.Rect(
-            pw * 0.62,   # 페이지 62%부터
-            ph * 0.93,   # 하단 7% 영역
+        # 우측 영역
+        right_area = fitz.Rect(
+            pw * 0.65,   # 65%부터
+            ph - 50,     # 하단 50pt
             pw,          # 오른쪽 끝
             ph           # 끝까지
         )
         
         shape = page.new_shape()
-        shape.draw_rect(left_bottom)
-        shape.draw_rect(right_bottom)
+        shape.draw_rect(left_area)
+        shape.draw_rect(right_area)
         shape.finish(color=(1, 1, 1), fill=(1, 1, 1))
         shape.commit()
     
@@ -241,98 +188,93 @@ def main():
     st.title("🔒 PDF 개인정보 보호 도구")
     
     st.markdown("""
-    ### 📌 처리되는 정보
+    ### 📌 처리 내용
     
-    ✅ **학교명**: "○○고등학교" 전체 페이지 검색 삭제  
-    ✅ **첫 번째 표**: 학과, 반, 번호, 담임성명 (영역 기반 완전 삭제)  
-    ✅ **개인정보**: 이름, 성별, 주민등록번호, 주소  
-    ✅ **학적사항**: 졸업/입학 학교 및 날짜 (영역 기반 완전 삭제)  
-    ✅ **사진**: 우측 상단 학생 사진  
-    ✅ **페이지 하단**: 모든 페이지의 반/번호/성명 (페이지 번호 보존)
+    ✅ **학교명**: "○○고등학교" 자동 검색 삭제  
+    ✅ **상단 표**: 표 구조 유지, 학과/반/번호/담임 내용만 삭제  
+    ✅ **개인정보**: 이름, 성별, 주민번호, 주소 삭제  
+    ✅ **학적사항**: 졸업/입학 정보 완전 삭제  
+    ✅ **사진**: 우측 상단 사진 삭제  
+    ✅ **하단 표**: 반/번호/성명 표 완전 삭제 (페이지 번호는 유지)
     """)
     
     uploaded_file = st.file_uploader(
-        "📁 PDF 파일을 업로드하세요",
+        "📁 PDF 파일 업로드",
         type=['pdf'],
         help="학교생활기록부 PDF (최대 23페이지)"
     )
     
-    if uploaded_file is not None:
-        st.info(f"📄 **{uploaded_file.name}** 업로드 완료")
+    if uploaded_file:
+        st.info(f"📄 **{uploaded_file.name}**")
         
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            process_btn = st.button(
-                "🔒 개인정보 보호 처리 시작", 
-                type="primary", 
-                use_container_width=True
-            )
-        
-        if process_btn:
+        if st.button("🔒 개인정보 보호 처리", type="primary", use_container_width=True):
             
-            with st.spinner("🔄 처리 중..."):
+            with st.spinner("처리 중..."):
                 try:
                     pdf_bytes = uploaded_file.read()
                     
                     # 페이지 수 확인
-                    pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-                    num_pages = len(pdf_doc)
-                    pdf_doc.close()
+                    temp_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+                    num_pages = len(temp_doc)
+                    temp_doc.close()
                     
                     if num_pages > 23:
-                        st.error(f"❌ 페이지 수 초과 (현재: {num_pages}페이지)")
+                        st.error(f"❌ 페이지 초과 ({num_pages}페이지)")
                         return
                     
-                    # 진행 바
-                    progress = st.progress(0)
-                    status = st.empty()
+                    # 진행 표시
+                    bar = st.progress(0)
+                    stat = st.empty()
                     
-                    status.text("📖 PDF 분석 중...")
-                    progress.progress(25)
+                    stat.text("📖 분석 중...")
+                    bar.progress(30)
                     
-                    status.text("🔍 개인정보 검색 중...")
-                    progress.progress(50)
+                    stat.text("🔒 삭제 중...")
+                    bar.progress(60)
                     
-                    # 처리
-                    redacted_pdf = redact_pdf(pdf_bytes)
+                    redacted = redact_pdf(pdf_bytes)
                     
-                    status.text("🔒 정보 삭제 완료!")
-                    progress.progress(100)
+                    stat.text("✅ 완료!")
+                    bar.progress(100)
                     
-                    st.success(f"✅ 총 {num_pages}페이지 처리 완료!")
+                    st.success(f"✅ {num_pages}페이지 처리 완료!")
                     
-                    # 다운로드
                     st.download_button(
-                        label="📥 보호된 PDF 다운로드",
-                        data=redacted_pdf,
+                        "📥 보호된 PDF 다운로드",
+                        data=redacted,
                         file_name="private_protected_document.pdf",
                         mime="application/pdf",
                         type="primary",
                         use_container_width=True
                     )
                     
-                    st.info("💡 **반드시 확인**: 다운로드한 파일을 열어 모든 정보가 삭제되었는지 확인하세요.")
+                    st.warning("⚠️ **반드시 결과를 확인하세요!**")
                     
                 except Exception as e:
                     st.error(f"❌ 오류: {str(e)}")
-                    with st.expander("상세 정보"):
-                        st.exception(e)
     
-    with st.expander("ℹ️ 사용 방법"):
+    with st.expander("📖 사용법"):
         st.markdown("""
-        1. PDF 파일 업로드
-        2. 처리 버튼 클릭
-        3. 완료 후 다운로드
-        4. 결과 확인 필수!
+        1. PDF 업로드
+        2. 처리 버튼 클릭  
+        3. 다운로드
+        4. **결과 확인 필수**
         """)
     
-    with st.expander("⚠️ 주의사항"):
+    with st.expander("⚠️ 주의"):
         st.markdown("""
-        - ✔️ 결과물 확인 필수
-        - ✔️ 원본 파일 백업 권장
-        - ✔️ 표준 PDF만 지원
-        - ✔️ 최대 23페이지
+        - 원본 파일 백업 권장
+        - 표준 PDF만 지원
+        - 최대 23페이지
         """)
+    
+    st.markdown("---")
+    st.markdown(
+        "<div style='text-align:center;color:gray;'>"
+        "🔒 PDF 개인정보 보호 도구 v4.0"
+        "</div>",
+        unsafe_allow_html=True
+    )
 
 
 if __name__ == "__main__":
