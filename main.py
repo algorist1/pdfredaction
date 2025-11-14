@@ -7,7 +7,7 @@ from typing import List, Tuple
 # -------------------- 유틸 --------------------
 def border_safe_trim(rect: fitz.Rect, pw: float, ph: float,
                      pad_lr: float = 0.0010,   # 좌우 소폭 확장(글자 잔여 제거)
-                     trim_tb: float = 0.2000   # 상하 크게 깎아 가로선 보존
+                     trim_tb: float = 0.3000   # 상하 크게 깎아 가로선 보존
                      ) -> fitz.Rect:
     """표 선을 건드리지 않도록, 위아래를 줄이고 좌우를 아주 살짝 늘린 사각형 반환."""
     dx = pw * pad_lr
