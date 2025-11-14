@@ -192,39 +192,47 @@ def redact_sensitive_info(input_pdf_bytes: bytes) -> bytes | None:
                     addr_rects = [border_safe_trim(r, pw, ph) for r in addr_rects]
                     redact_rects(page, addr_rects)
 
-                # ★★★ 학적사항 영역: 각 글자를 직접 찾아서 삭제 (표선 절대 보존) ★★★
+                # ★★★ 학적사항 영역: 모든 문자 완전 삭제, 표선 보존 ★★★
                 if lab_acad:
                     # 학적사항 영역의 y 범위
-                    y_top = lab_acad.y0 - ph * 0.002
+                    y_top = lab_acad.y0 - ph * 0.003
                     if lab_extra:
-                        y_bot = lab_extra.y0 + ph * 0.002
+                        y_bot = lab_extra.y0 + ph * 0.003
                     else:
                         y_bot = (title_2.y0 - ph * 0.01) if title_2 else y1_bot
                     
-                    # 페이지의 모든 글자 정보 가져오기
-                    all_chars = page.get_text("rawdict")
-                    
-                    # 학적사항 영역 내의 모든 글자 수집
+                    # 모든 문자 수집 (get_text("dict") 사용)
+                    text_dict = page.get_text("dict")
                     chars_to_delete = []
-                    for block in all_chars.get("blocks", []):
+                    
+                    for block in text_dict.get("blocks", []):
                         if block.get("type") == 0:  # 텍스트 블록
                             for line in block.get("lines", []):
                                 for span in line.get("spans", []):
-                                    bbox = span.get("bbox", [])
-                                    if len(bbox) == 4:
-                                        char_x0, char_y0, char_x1, char_y1 = bbox
-                                        # 학적사항 영역 내에 있고, 라벨 오른쪽에 있는 텍스트만
-                                        if (char_y0 >= y_top and char_y1 <= y_bot and 
-                                            char_x0 > lab_acad.x1):
-                                            chars_to_delete.append((char_x0, char_y0, char_x1, char_y1))
+                                    # span의 bbox와 각 문자 확인
+                                    span_bbox = span.get("bbox")
+                                    if span_bbox:
+                                        sx0, sy0, sx1, sy1 = span_bbox
+                                        # 학적사항 영역 내이고 라벨 오른쪽이면
+                                        if (sy0 >= y_top and sy1 <= y_bot and sx0 > lab_acad.x1):
+                                            # 개별 문자 정보가 있으면 사용
+                                            if "chars" in span:
+                                                for char in span["chars"]:
+                                                    c_bbox = char.get("bbox")
+                                                    if c_bbox:
+                                                        chars_to_delete.append(c_bbox)
+                                            else:
+                                                # 문자 정보 없으면 span 전체
+                                                chars_to_delete.append(span_bbox)
                     
-                    # 각 글자를 최소한의 확장으로 삭제
-                    for cx0, cy0, cx1, cy1 in chars_to_delete:
+                    # 수집된 모든 문자 bbox 삭제 (최소 확장)
+                    for bbox in chars_to_delete:
+                        cx0, cy0, cx1, cy1 = bbox
                         char_rect = fitz.Rect(
-                            cx0 - pw * 0.0005,  # 좌 최소 확장
-                            cy0,                 # 상 확장 없음
-                            cx1 + pw * 0.0015,  # 우 약간 확장
-                            cy1                  # 하 확장 없음
+                            cx0 - pw * 0.0008,  # 좌측 미세 확장
+                            cy0 - ph * 0.0003,  # 상단 미세 확장
+                            cx1 + pw * 0.0020,  # 우측 확장 (완전 삭제)
+                            cy1 + ph * 0.0003   # 하단 미세 확장
                         )
                         page.add_redact_annot(char_rect, fill=(1, 1, 1))
 
