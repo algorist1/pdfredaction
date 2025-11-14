@@ -6,9 +6,8 @@ from typing import List, Tuple
 
 # -------------------- 유틸 --------------------
 def border_safe_trim(rect: fitz.Rect, pw: float, ph: float,
-                     pad_lr: float = 0.0010,   # 좌우 소폭 확장(글자 잔여 제거)
-                     trim_tb: float = 0.0050   # 상하 크게 깎아 가로선 보존
-                     ) -> fitz.Rect:
+                     pad_lr: float = 0.0010,
+                     trim_tb: float = 0.0050) -> fitz.Rect:
     """표 선을 건드리지 않도록, 위아래를 줄이고 좌우를 아주 살짝 늘린 사각형 반환."""
     dx = pw * pad_lr
     dy = ph * trim_tb
@@ -47,7 +46,7 @@ def words_in_range(
     y 대역(필수) + 선택적 x 대역에 들어오는 단어 목록 반환.
     반환: (x0, y0, x1, y1, text)
     """
-    words = page.get_text("words")  # (x0,y0,x1,y1,word, block_no, line_no, word_no)
+    words = page.get_text("words")
     out: List[Tuple[float, float, float, float, str]] = []
     for w in words:
         x0, y0w, x1, y1w, txt = w[0], w[1], w[2], w[3], w[4]
@@ -61,7 +60,7 @@ def words_in_range(
 def union_rect_of_words(
     words: List[Tuple[float, float, float, float, str]], x_min: float | None = None, x_max: float | None = None
 ) -> List[fitz.Rect]:
-    """같은 줄 단어들을 묶어 최소 bbox 리스트 생성. (x_min/x_max가 있으면 그 안쪽만 남김)"""
+    """같은 줄 단어들을 묶어 최소 bbox 리스트 생성."""
     if not words:
         return []
     words = sorted(words, key=lambda w: (round(w[1], 1), w[0]))
@@ -70,18 +69,14 @@ def union_rect_of_words(
         placed = False
         for line in lines:
             if abs(line[0][1] - w[1]) < 2.5:
-                line.append(w)
-                placed = True
-                break
+                line.append(w); placed = True; break
         if not placed:
             lines.append([w])
 
     rects: List[fitz.Rect] = []
     for line in lines:
-        xs0 = [w[0] for w in line]
-        ys0 = [w[1] for w in line]
-        xs1 = [w[2] for w in line]
-        ys1 = [w[3] for w in line]
+        xs0 = [w[0] for w in line]; ys0 = [w[1] for w in line]
+        xs1 = [w[2] for w in line]; ys1 = [w[3] for w in line]
         r = fitz.Rect(min(xs0), min(ys0), max(xs1), max(ys1))
         if x_min is not None or x_max is not None:
             clip_x0 = r.x0 if x_min is None else max(r.x0, x_min)
@@ -98,12 +93,9 @@ def union_rect_of_words(
 def redact_sensitive_info(input_pdf_bytes: bytes) -> bytes | None:
     """
     - 1페이지 첫 표: '반/번호/담임성명' 내용만 삭제(테두리/중간선 보존)
-    - 1페이지 인적·학적사항: 학생정보(성명/성별/주민등록번호/주소) 내용만 삭제
-    - 1페이지 학적사항: 두 줄 연도(예: 202, 2023 등) 포함 내용 전체 삭제
-      (특히 '202' 잔여를 강하게 제거, 표선 보존)
-    - '(고등학교)' 검색 마스킹 + 모든 페이지 하단:
-        · 하단 표/날짜/이름 전체 삭제(표선까지 포함, 즉 완전 제거)
-        · 단, '페이지수(예: 1 / 16)'만 정확히 보존
+    - 1페이지 인적·학적사항: 학생정보 내용만 삭제
+    - 1페이지 학적사항: 두 줄 연도(예: 202) 포함 내용 전체 삭제(표선 보존, '202' 완전제거)
+    - 모든 페이지 하단: 표/날짜/이름 완전 삭제, 페이지수만 보존
     """
     try:
         doc = fitz.open(stream=input_pdf_bytes, filetype="pdf")
@@ -132,21 +124,21 @@ def redact_sensitive_info(input_pdf_bytes: bytes) -> bytes | None:
                 words = words_in_range(page, table_y_top, table_y_bottom)
 
                 # 반 열
-                w_ban = [w for w in words if w[0] >= x_ban - pw * 0.006 and w[2] <= x_beonho - pw * 0.004]
-                r_ban = union_rect_of_words(w_ban, x_min=x_ban + pw * 0.002, x_max=x_beonho - pw * 0.003)
+                w_ban = [w for w in words if w[0] >= x_ban - pw*0.006 and w[2] <= x_beonho - pw*0.004]
+                r_ban = union_rect_of_words(w_ban, x_min=x_ban + pw*0.002, x_max=x_beonho - pw*0.003)
 
                 # 번호 열
-                w_no = [w for w in words if w[0] >= x_beonho - pw * 0.006 and w[2] <= x_damim - pw * 0.004]
-                r_no = union_rect_of_words(w_no, x_min=x_beonho + pw * 0.002, x_max=x_damim - pw * 0.003)
+                w_no = [w for w in words if w[0] >= x_beonho - pw*0.006 and w[2] <= x_damim - pw*0.004]
+                r_no = union_rect_of_words(w_no, x_min=x_beonho + pw*0.002, x_max=x_damim - pw*0.003)
 
                 # 담임성명 열
-                w_dm = [w for w in words if w[0] >= x_damim - pw * 0.006]
-                r_dm = union_rect_of_words(w_dm, x_min=x_damim + pw * 0.002, x_max=x_right - pw * 0.003)
+                w_dm = [w for w in words if w[0] >= x_damim - pw*0.006]
+                r_dm = union_rect_of_words(w_dm, x_min=x_damim + pw*0.002, x_max=x_right - pw*0.003)
 
                 safe_rects = [border_safe_trim(r, pw, ph) for r in (r_ban + r_no + r_dm)]
                 redact_rects(page, safe_rects)
 
-                # --- A2) 사진: 상단 40%의 가장 오른쪽 이미지 ---
+                # --- A2) 사진 ---
                 raw = page.get_text("rawdict")
                 imgs: List[fitz.Rect] = []
                 for blk in raw.get("blocks", []):
@@ -157,7 +149,7 @@ def redact_sensitive_info(input_pdf_bytes: bytes) -> bytes | None:
                             imgs.append(r)
                 if imgs:
                     imgs.sort(key=lambda r: (r.x0, (r.width * r.height)), reverse=True)
-                    page.add_redact_annot(inflate(imgs[0], pw * 0.004, ph * 0.004), fill=(1, 1, 1))
+                    page.add_redact_annot(inflate(imgs[0], pw*0.004, ph*0.004), fill=(1, 1, 1))
 
                 # --- A3) 1. 인적·학적사항 ---
                 title_1 = search_single_bbox(page, "1.")
@@ -172,90 +164,61 @@ def redact_sensitive_info(input_pdf_bytes: bytes) -> bytes | None:
                 lab_acad = search_single_bbox(page, "학적사항")
                 lab_extra = search_single_bbox(page, "특기사항")
 
-                # 학생정보(성명/성별/주민번호) 라인: 라벨 오른쪽만
+                # 학생정보 라인
                 if lab_name:
-                    y0, y1 = lab_name.y0 - ph * 0.006, lab_name.y1 + ph * 0.006
+                    y0, y1 = lab_name.y0 - ph*0.006, lab_name.y1 + ph*0.006
                     line_words = words_in_range(page, y0, y1)
                     rects = []
                     if lab_name:
-                        rects += union_rect_of_words(
-                            [w for w in line_words if w[0] > lab_name.x1 + pw * 0.004],
-                            x_min=lab_name.x1 + pw * 0.004,
-                        )
+                        rects += union_rect_of_words([w for w in line_words if w[0] > lab_name.x1 + pw*0.004],
+                                                     x_min=lab_name.x1 + pw*0.004)
                     if lab_gender:
-                        rects += union_rect_of_words(
-                            [w for w in line_words if w[0] > lab_gender.x1 + pw * 0.004],
-                            x_min=lab_gender.x1 + pw * 0.004,
-                        )
+                        rects += union_rect_of_words([w for w in line_words if w[0] > lab_gender.x1 + pw*0.004],
+                                                     x_min=lab_gender.x1 + pw*0.004)
                     if lab_rrn:
-                        rects += union_rect_of_words(
-                            [w for w in line_words if w[0] > lab_rrn.x1 + pw * 0.004],
-                            x_min=lab_rrn.x1 + pw * 0.004,
-                        )
+                        rects += union_rect_of_words([w for w in line_words if w[0] > lab_rrn.x1 + pw*0.004],
+                                                     x_min=lab_rrn.x1 + pw*0.004)
                     rects = [border_safe_trim(r, pw, ph) for r in rects]
                     redact_rects(page, rects)
 
                 # 주소 라인
                 if lab_addr:
-                    ay0, ay1 = lab_addr.y0 - ph * 0.006, lab_addr.y1 + ph * 0.006
+                    ay0, ay1 = lab_addr.y0 - ph*0.006, lab_addr.y1 + ph*0.006
                     addr_words = words_in_range(page, ay0, ay1)
                     addr_rects = union_rect_of_words(
-                        [w for w in addr_words if w[0] > lab_addr.x1 + pw * 0.004],
-                        x_min=lab_addr.x1 + pw * 0.004,
+                        [w for w in addr_words if w[0] > lab_addr.x1 + pw*0.004],
+                        x_min=lab_addr.x1 + pw*0.004
                     )
                     addr_rects = [border_safe_trim(r, pw, ph) for r in addr_rects]
                     redact_rects(page, addr_rects)
 
-                # === ★ 여기부터 학적사항 부분 전면 교체 ★ ===
-                # 학적사항(특기사항 전까지) — 라벨 오른쪽 전체 + '202' 강제 보강
+                # ★★★ 학적사항 영역: "202" 완전 삭제 전략 ★★★
                 if lab_acad:
-                    # 세로 범위: 학적사항 라인 ~ 특기사항 라인 바로 위까지
-                    y_top = lab_acad.y0 - ph * 0.004
-                    y_bot = (lab_extra.y0 - ph * 0.004) if lab_extra else y1_bot
-
-                    # 1차: 학적사항 라벨 오른쪽 전체를 줄 단위로 지움
-                    acad_words = words_in_range(
-                        page,
-                        y_top,
-                        y_bot,
-                        x_min=lab_acad.x1 + pw * 0.001,
-                    )
-                    # 오른쪽 바깥 표선은 살짝 남겨두기 위해 x_max는 0.98 정도까지만
-                    acad_line_rects = union_rect_of_words(
-                        acad_words,
-                        x_min=lab_acad.x1 + pw * 0.001,
-                        x_max=pw * 0.98,
-                    )
-                    acad_line_rects = [
-                        border_safe_trim(r, pw, ph, pad_lr=0.0020, trim_tb=0.0015)
-                        for r in acad_line_rects
-                    ]
-                    redact_rects(page, acad_line_rects)
-
-                    # 2차: '202'가 포함된 위치를 한 번 더 강하게 덮기
-                    try:
-                        hits_202 = page.search_for("202", hit_max=64)
-                    except Exception:
-                        hits_202 = []
-
-                    strong_rects: List[fitz.Rect] = []
-                    for r in hits_202:
-                        # 학적사항 영역 안쪽 + 라벨 오른쪽에 있는 것만 대상
-                        if (y_top - ph * 0.002) <= r.y0 <= (y_bot + ph * 0.002) and r.x0 > lab_acad.x1:
-                            strong_rects.append(
-                                border_safe_trim(
-                                    r,
-                                    pw,
-                                    ph,
-                                    pad_lr=0.0150,   # 좌우 넉넉히 → '202' 완전히 포함
-                                    trim_tb=0.0005,  # 위아래 거의 그대로 → 숫자 위/아래 잘리지 않게
-                                )
+                    y_top = lab_acad.y0 - ph*0.004
+                    y_bot = (lab_extra.y0 - ph*0.004) if lab_extra else y1_bot
+                    
+                    # 학적사항 영역의 모든 단어 수집
+                    acad_words = words_in_range(page, y_top, y_bot, x_min=lab_acad.x1)
+                    
+                    if acad_words:
+                        # 각 단어를 개별적으로 마스킹 (trim 최소화)
+                        for wx0, wy0, wx1, wy1, wtxt in acad_words:
+                            # 좌우만 약간 확장, 상하는 거의 안 깎음
+                            r = fitz.Rect(
+                                wx0 - pw * 0.002,  # 왼쪽 약간 확장
+                                wy0 + ph * 0.0005,  # 위 최소 trim
+                                wx1 + pw * 0.002,  # 오른쪽 약간 확장
+                                wy1 - ph * 0.0005   # 아래 최소 trim
                             )
-                    if strong_rects:
-                        redact_rects(page, strong_rects)
-                # === ★ 학적사항 블록 끝 ★ ===
+                            page.add_redact_annot(r, fill=(1, 1, 1))
+                        
+                        # 추가: 전체 영역을 한번 더 덮기 (혹시 빠진 부분 방지)
+                        x_left = lab_acad.x1
+                        x_right = pw * 0.97  # 표 우측선 보존
+                        full_cover = fitz.Rect(x_left, y_top, x_right, y_bot)
+                        page.add_redact_annot(full_cover, fill=(1, 1, 1))
 
-            # ---------------- B. "(고등학교)" 등 검색 마스킹(유지) ----------------
+            # ---------------- B. 고등학교 검색 마스킹 ----------------
             for t in ["대성고등학교", "상명대학교사범대학부속여자고등학교", "고등학교"]:
                 try:
                     for inst in page.search_for(t):
@@ -263,7 +226,7 @@ def redact_sensitive_info(input_pdf_bytes: bytes) -> bytes | None:
                 except Exception:
                     pass
 
-            # ---------------- C. 모든 페이지 하단: 표/날짜/이름 완전 삭제 + 페이지수 보존 ----------------
+            # ---------------- C. 하단 처리 ----------------
             band_y0 = ph * 0.93
             band_y1 = ph * 1.00
 
@@ -273,11 +236,7 @@ def redact_sensitive_info(input_pdf_bytes: bytes) -> bytes | None:
             for i, w in enumerate(fwords):
                 if str(w[4]).strip() == "/":
                     sx = (w[0] + w[2]) / 2
-                    same_line_nums = [
-                        ww
-                        for ww in fwords
-                        if abs(ww[1] - w[1]) < 3.0 and re.fullmatch(r"\d+", str(ww[4]).strip())
-                    ]
+                    same_line_nums = [ww for ww in fwords if abs(ww[1] - w[1]) < 3.0 and re.fullmatch(r"\d+", str(ww[4]).strip())]
                     same_line_nums.sort(key=lambda ww: abs(((ww[0] + ww[2]) / 2) - sx))
                     left = [ww for ww in same_line_nums if ((ww[0] + ww[2]) / 2) < sx]
                     right = [ww for ww in same_line_nums if ((ww[0] + ww[2]) / 2) >= sx]
@@ -285,36 +244,20 @@ def redact_sensitive_info(input_pdf_bytes: bytes) -> bytes | None:
                     if right:
                         keep.append(right[0])
                     keep.append(w)
-                    xs0 = [r[0] for r in keep]
-                    ys0 = [r[1] for r in keep]
-                    xs1 = [r[2] for r in keep]
-                    ys1 = [r[3] for r in keep]
+                    xs0 = [r[0] for r in keep]; ys0 = [r[1] for r in keep]
+                    xs1 = [r[2] for r in keep]; ys1 = [r[3] for r in keep]
                     margin_x = pw * 0.006
                     margin_y = ph * 0.004
-                    keep_rect = fitz.Rect(
-                        min(xs0) - margin_x,
-                        min(ys0) - margin_y,
-                        max(xs1) + margin_x,
-                        max(ys1) + margin_y,
-                    )
+                    keep_rect = fitz.Rect(min(xs0) - margin_x, min(ys0) - margin_y,
+                                          max(xs1) + margin_x, max(ys1) + margin_y)
                     break
 
             if keep_rect is not None:
                 left_rect = fitz.Rect(0, band_y0, max(keep_rect.x0, 0), band_y1)
                 right_rect = fitz.Rect(min(keep_rect.x1, pw), band_y0, pw, band_y1)
                 expand = ph * 0.002
-                left_rect = fitz.Rect(
-                    left_rect.x0,
-                    max(0, left_rect.y0 - expand),
-                    left_rect.x1,
-                    min(band_y1, left_rect.y1 + expand),
-                )
-                right_rect = fitz.Rect(
-                    right_rect.x0,
-                    max(0, right_rect.y0 - expand),
-                    right_rect.x1,
-                    min(band_y1, right_rect.y1 + expand),
-                )
+                left_rect = fitz.Rect(left_rect.x0, max(0, left_rect.y0 - expand), left_rect.x1, min(band_y1, left_rect.y1 + expand))
+                right_rect = fitz.Rect(right_rect.x0, max(0, right_rect.y0 - expand), right_rect.x1, min(band_y1, right_rect.y1 + expand))
                 redact_rects(page, [left_rect, right_rect])
             else:
                 redact_rects(page, [fitz.Rect(0, band_y0, pw, band_y1)])
@@ -333,7 +276,7 @@ def redact_sensitive_info(input_pdf_bytes: bytes) -> bytes | None:
 # -------------------- Streamlit UI --------------------
 st.set_page_config(page_title="PDF 개인정보 보호 앱", page_icon="🔒")
 st.title("🔒 PDF 민감정보 마스킹 앱")
-st.write("상단 표/인적·학적사항(연도 포함)과 하단(표·날짜·이름)은 완전 삭제, 페이지수(예: 1 / 16)만 남깁니다.")
+st.write("학적사항의 '202' 등 모든 내용을 완벽히 삭제하며, 표 테두리는 보존합니다.")
 uploaded_file = st.file_uploader("PDF 파일 업로드", type=["pdf"])
 
 if uploaded_file:
