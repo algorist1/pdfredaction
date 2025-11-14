@@ -213,7 +213,7 @@ def redact_sensitive_info(input_pdf_bytes: bytes) -> bytes | None:
                     if numeric_words:
                         num_line_rects = union_rect_of_words(numeric_words)
                         # ★ 좌우 여유를 강하게: 0.0080 (0.0060에서 증가)
-                        num_line_rects = [border_safe_trim(r, pw, ph, pad_lr=0.0080, trim_tb=0.0028) for r in num_line_rects]
+                        num_line_rects = [border_safe_trim(r, pw, ph, pad_lr=0.0120, trim_tb=0.0028) for r in num_line_rects]
                         redact_rects(page, num_line_rects)
 
                     # 3차: 하드-와이프 — 각 줄의 마지막 글자보다 2% 오른쪽까지만 덮기(표 우측선 보존)
