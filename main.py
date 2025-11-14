@@ -192,7 +192,7 @@ def redact_sensitive_info(input_pdf_bytes: bytes) -> bytes | None:
                     addr_rects = [border_safe_trim(r, pw, ph) for r in addr_rects]
                     redact_rects(page, addr_rects)
 
-                # ★★★ 학적사항 영역: 내용만 삭제, 표선 완전 보존 ★★★
+                # ★★★ 학적사항 영역: 각 글자를 직접 찾아서 삭제 (표선 절대 보존) ★★★
                 if lab_acad:
                     # 학적사항 영역의 y 범위
                     y_top = lab_acad.y0 - ph * 0.002
@@ -201,22 +201,32 @@ def redact_sensitive_info(input_pdf_bytes: bytes) -> bytes | None:
                     else:
                         y_bot = (title_2.y0 - ph * 0.01) if title_2 else y1_bot
                     
-                    # 학적사항 라벨 오른쪽 영역의 모든 단어 수집
-                    acad_words = words_in_range(page, y_top, y_bot, x_min=lab_acad.x1 + pw * 0.001)
+                    # 페이지의 모든 글자 정보 가져오기
+                    all_chars = page.get_text("rawdict")
                     
-                    if acad_words:
-                        # 각 줄별로 그룹화하여 bbox 생성
-                        line_rects = union_rect_of_words(acad_words, x_min=lab_acad.x1 + pw * 0.001)
-                        
-                        # 각 줄을 개별적으로 마스킹 (표선 보존)
-                        for r in line_rects:
-                            safe_r = fitz.Rect(
-                                r.x0 - pw * 0.003,      # 좌측 여유
-                                r.y0 + ph * 0.0020,     # 상단 trim (가로선 보존)
-                                r.x1 + pw * 0.005,      # 우측 여유 (숫자 완전 삭제)
-                                r.y1 - ph * 0.0020      # 하단 trim (가로선 보존)
-                            )
-                            page.add_redact_annot(safe_r, fill=(1, 1, 1))
+                    # 학적사항 영역 내의 모든 글자 수집
+                    chars_to_delete = []
+                    for block in all_chars.get("blocks", []):
+                        if block.get("type") == 0:  # 텍스트 블록
+                            for line in block.get("lines", []):
+                                for span in line.get("spans", []):
+                                    bbox = span.get("bbox", [])
+                                    if len(bbox) == 4:
+                                        char_x0, char_y0, char_x1, char_y1 = bbox
+                                        # 학적사항 영역 내에 있고, 라벨 오른쪽에 있는 텍스트만
+                                        if (char_y0 >= y_top and char_y1 <= y_bot and 
+                                            char_x0 > lab_acad.x1):
+                                            chars_to_delete.append((char_x0, char_y0, char_x1, char_y1))
+                    
+                    # 각 글자를 최소한의 확장으로 삭제
+                    for cx0, cy0, cx1, cy1 in chars_to_delete:
+                        char_rect = fitz.Rect(
+                            cx0 - pw * 0.0005,  # 좌 최소 확장
+                            cy0,                 # 상 확장 없음
+                            cx1 + pw * 0.0015,  # 우 약간 확장
+                            cy1                  # 하 확장 없음
+                        )
+                        page.add_redact_annot(char_rect, fill=(1, 1, 1))
 
             # ---------------- B. 고등학교 검색 마스킹 ----------------
             for t in ["대성고등학교", "상명대학교사범대학부속여자고등학교", "고등학교"]:
