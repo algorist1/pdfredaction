@@ -1,36 +1,110 @@
-당신은 30년 경력의 베테랑 파이썬(Python) 코드 및 앱 개발 전문가입니다.
+import streamlit as st
+import fitz  # PyMuPDF
+import io
 
-## 임무
-사용자가 업로드한 최대 23페이지 내외의 PDF 파일에서 특정 영역의 개인 식별 정보(PII)를 삭제하고, 이 부분을 흰색 직사각형으로 덮어서 개인 정보가 보호된 새로운 PDF 파일을 다운로드할 수 있도록 하는 **Streamlit 웹 애플리케이션 코드**와 **필요한 requirements.txt** 파일을 작성하시오.참고로 **첫 번째 첨부를 두 번째 첨부처럼 바꾸려고 함**
+def process_pdf(doc):
+    """
+    PDF 문서의 모든 페이지를 순회하며 개인정보를 제거합니다.
+    두 가지 방식(텍스트 검색, 고정 좌표)을 모두 사용합니다.
+    """
 
-## 기술 요구사항
-1.  **메인 언어 및 프레임워크:** Python, Streamlit
-2.  **PDF 처리 라이브러리:** PyMuPDF (import fitz)
-3.  **처리 방식:**
-    * **텍스트 삭제:** 특정 문구는 `page.search_for()` 함수를 사용하여 위치를 찾은 후, 해당 문구가 위치한 작은 영역에 흰색 직사각형을 그려 덮습니다.
-    * **영역 삭제:** 나머지 민감 정보는 기존과 같이 좌표를 계산하여 흰색 직사각형(Rectangle)으로 덮습니다.
+    # --- 1. 텍스트 검색 기반 삭제 로직 ("고등학교" 문구) ---
+    # 모든 페이지를 순회하며 "고등학교"라는 텍스트를 검색하여 흰색으로 덮습니다.
+    # 이는 '수상경력', '봉사활동실적' 표 내의 학교명 및 하단 푸터의 학교명을 처리합니다.
+    for page in doc:
+        try:
+            # "고등학교" 텍스트가 포함된 모든 위치 (Rect 객체 리스트)를 찾습니다.
+            text_instances = page.search_for("고등학교")
+            
+            # 찾은 모든 텍스트 영역을 흰색 사각형으로 덮습니다.
+            for inst in text_instances:
+                # fill: 채우기 색 (1, 1, 1) = 흰색
+                # overlay=True: 기존 내용 위에 덮어쓰기
+                page.draw_rect(inst, color=(1, 1, 1), fill=(1, 1, 1), overlay=True)
+        except Exception as e:
+            st.warning(f"{page.number + 1}페이지 텍스트 검색 중 오류: {e}")
 
-## 개인정보 삭제 상세 규칙
+    # --- 2. 고정 좌표 기반 영역 삭제 로직 ---
+    
+    # --- 2-1. 1페이지 상단 및 인적사항 (고정 영역) ---
+    if len(doc) > 0:
+        page1 = doc[0]
+        try:
+            # 1페이지 상단 첫 번째 표 (사진, 반, 번호, 담임성명 내용)
+            # 사진 영역 (좌표: x0, y0, x1, y1)
+            page1.draw_rect(fitz.Rect(435, 30, 555, 170), color=(1, 1, 1), fill=(1, 1, 1))
+            # 1-3학년 반, 번호, 담임 내용 영역 (표 테두리는 남김)
+            page1.draw_rect(fitz.Rect(350, 99, 555, 144), color=(1, 1, 1), fill=(1, 1, 1))
 
-업로드된 PDF 파일(예시: 학교생활기록부)을 기준으로 다음 영역을 처리하시오.
+            # 1페이지 두 번째 표 (1. 인적·학적사항 내용)
+            # 성명, 성별, 주민번호 내용 영역
+            page1.draw_rect(fitz.Rect(100, 188, 555, 203), color=(1, 1, 1), fill=(1, 1, 1))
+            # 주소 내용 영역
+            page1.draw_rect(fitz.Rect(100, 203, 555, 218), color=(1, 1, 1), fill=(1, 1, 1))
+            # 학적사항 내용 영역
+            page1.draw_rect(fitz.Rect(100, 225, 555, 255), color=(1, 1, 1), fill=(1, 1, 1))
+            # 특기사항 내용 영역
+            page1.draw_rect(fitz.Rect(100, 260, 555, 275), color=(1, 1, 1), fill=(1, 1, 1))
+        
+        except Exception as e:
+            st.error(f"1페이지 고정 영역 처리 중 오류: {e}")
 
-### 1. 텍스트 문구 자체만 삭제하는 규칙 (핵심 수정 사항)
-* **1~2페이지 (수상경력), 5~6페이지 (봉사활동실적) 표 내, 그리고 모든 페이지 맨 하단:**
-    * **"(\ \ \ )고등학교"**라는 **문구 자체**를 정확하게 검색하고, 해당 문구가 차지하는 영역만 **흰색으로 덮어 보이지 않게** 처리합니다. 이 문구가 포함된 주변 셀이나 표 구조는 그대로 유지합니다.
+    # --- 2-2. 모든 페이지 맨 하단 (고정 영역) ---
+    for page in doc:
+        try:
+            page_rect = page.rect  # 페이지의 전체 크기 (width, height)
+            
+            # 하단 중앙의 페이지 번호는 남겨두고,
+            # 오른쪽의 '반, 번호, 성명' 표 전체를 덮습니다. (X좌표 370부터 끝까지)
+            # (Y좌표는 일반적인 A4 하단 기준)
+            footer_table_rect = fitz.Rect(370, 790, page_rect.width, 815)
+            page.draw_rect(footer_table_rect, color=(1, 1, 1), fill=(1, 1, 1))
+            
+            # 맨 아래의 추가적인 식별 라인(예: '.../담임교사명')이 있다면 덮습니다.
+            # Y좌표 816부터 페이지 끝까지
+            bottom_line_rect = fitz.Rect(0, 816, page_rect.width, page_rect.height)
+            page.draw_rect(bottom_line_rect, color=(1, 1, 1), fill=(1, 1, 1))
 
-### 2. 영역 전체를 삭제하는 기존 규칙 (유지)
-1.  **1페이지 상단 첫 번째 표:**
-    * 반, 번호, 담임성명, 사진 칸의 **내용 전체**를 흰색으로 덮습니다. (표 테두리는 유지)
-2.  **1페이지 두 번째 표 (1. 인적,학적사항):**
-    * 성명, 성별, 주민등록번호, 주소, 학적사항, 특기사항 칸의 **내용 전체**를 흰색으로 덮습니다. (표 테두리는 유지)
-3.  **모든 페이지 맨 하단:**
-    * 하단의 반, 번호, 성명 칸의 **내용 전체** 및 **해당 표 구조 자체**를 흰색으로 덮어 없앱니다.
-    * 단, **가운데 페이지 번호 표기**는 **반드시** 지우지 말고 남겨둡니다.
+        except Exception as e:
+            st.warning(f"{page.number + 1}페이지 하단 영역 처리 중 오류: {e}")
 
-## 출력 형식
-1.  `requirements.txt` 내용
-2.  `app.py` (Streamlit 코드) 내용 (통째로 복사-붙여넣기 가능하도록 하나의 코드 블록으로 작성)
+    return doc
 
-## 추가 요구사항
--   코드 작성 시, **텍스트 검색 및 덮기 로직**과 **좌표 기반 영역 덮기 로직**을 주석으로 명확히 구분하고 설명해야 합니다.
--   최종 결과 파일은 **"제거됨.pdf"** 이름으로 다운로드할 수 있도록 합니다.
+# --- Streamlit 앱 UI 구성 ---
+
+st.set_page_config(page_title="PDF 개인정보 보호 처리", layout="centered")
+st.title("PDF 개인정보 보호 처리기 🔒")
+st.write("학교생활기록부 PDF를 업로드하면 민감 정보(성명, 주민번호, 주소, 학교명 등)를 흰색으로 덮어 처리합니다.")
+
+uploaded_file = st.file_uploader("여기에 PDF 파일을 드래그 앤 드롭하세요.", type="pdf")
+
+if uploaded_file is not None:
+    try:
+        # 1. 파일 읽기
+        pdf_bytes = uploaded_file.getvalue()
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        
+        st.info(f"총 {len(doc)}페이지의 PDF 파일을 성공적으로 읽었습니다. 개인정보를 처리합니다...")
+
+        # 2. PDF 처리 함수 호출
+        processed_doc = process_pdf(doc)
+
+        # 3. 처리된 PDF를 메모리에 저장
+        output_bytes = processed_doc.tobytes()
+        processed_doc.close()
+        
+        st.success("✅ 개인정보 처리가 완료되었습니다. 아래 버튼을 눌러 다운로드하세요.")
+
+        # 4. 다운로드 버튼 제공
+        st.download_button(
+            label="처리된 '제거됨.pdf' 파일 다운로드",
+            data=output_bytes,
+            file_name="제거됨.pdf",
+            mime="application/pdf"
+        )
+    except Exception as e:
+        st.error(f"PDF 처리 중 오류가 발생했습니다: {e}")
+        st.warning("파일이 손상되었거나 암호화되어 있을 수 있습니다. 다른 파일을 시도해 주세요.")
+
+else:
+    st.info("PDF 파일을 업로드하면 처리를 시작합니다.")
