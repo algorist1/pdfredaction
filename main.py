@@ -38,11 +38,18 @@ STUDENT_INFO_KEYWORDS = ["반", "번호", "성명"]
 # --- 핵심 마스킹 함수 ---
 
 def add_redaction_annot(page, rect):
-    """페이지에 흰색 마스킹 주석을 추가하는 함수"""
-    # 페이지 하단 중앙의 쪽 번호 영역은 마스킹하지 않음 (Y 좌표 기준)
+    """페이지에 흰색 마스킹 주석을 추가하는 함수 (페이지 번호 보호 로직 강화)"""
+    page_width = page.rect.width
     page_height = page.rect.height
-    if rect.y1 > page_height - 50 and 250 < rect.x0 < 350:
-         # print(f"쪽 번호 영역으로 판단되어 마스킹 건너뜀: {rect}")
+
+    # 페이지 하단 중앙의 쪽 번호 영역은 마스킹하지 않도록 예외 처리
+    # 조건 강화: 1)하단 영역, 2)중앙 영역, 3)너비가 좁은 영역(페이지 번호 특징)
+    is_at_bottom = rect.y1 > page_height - 50
+    is_at_center = (page_width / 2 - 50) < rect.x0 < (page_width / 2 + 50)
+    is_narrow = rect.width < 100 # 페이지 번호 영역의 너비는 보통 100pt를 넘지 않음
+
+    if is_at_bottom and is_at_center and is_narrow:
+        # print(f"쪽 번호 영역으로 판단되어 마스킹 건너뜀: {rect}")
         return
 
     # 1페이지 상단 제목은 마스킹하지 않음
@@ -51,6 +58,7 @@ def add_redaction_annot(page, rect):
         return
 
     page.add_redact_annot(rect, fill=(1, 1, 1))
+
 
 def process_pdf(uploaded_file):
     """PDF 파일을 읽어 민감정보를 마스킹하고 새로운 PDF 파일을 반환하는 메인 함수"""
@@ -82,7 +90,6 @@ def process_pdf(uploaded_file):
         text_found = False
         
         # 1) "( )고등학교" 검색
-        # PyMuPDF의 search_for는 정규식을 직접 지원하지 않으므로, get_text("words")로 단어와 좌표를 얻어 처리
         words = page.get_text("words")
         for word in words:
             word_text = word[4]
@@ -90,7 +97,7 @@ def process_pdf(uploaded_file):
                 add_redaction_annot(page, fitz.Rect(word[:4]))
                 text_found = True
         
-        # 2) 수상경력, 봉사활동 등 특정 영역의 "고등학교" 검색 (페이지 번호 조건 추가)
+        # 2) 수상경력, 봉사활동 등 특정 영역의 "고등학교" 검색
         if page_num in [0, 1, 4, 5]: # 1~2, 5~6 페이지
             for inst in page.search_for("고등학교"):
                  add_redaction_annot(page, inst)
@@ -103,14 +110,10 @@ def process_pdf(uploaded_file):
                 text_found = True
 
         # [규칙 3] OCR 기반 마스킹 (스캔된 PDF)
-        # 텍스트 검색 결과가 거의 없고, 1페이지가 아닌 경우 OCR 시도
         if not text_found and page_num > 0:
             try:
-                # 고해상도 이미지로 변환
                 pix = page.get_pixmap(dpi=300)
                 img = Image.open(io.BytesIO(pix.tobytes("png")))
-                
-                # Tesseract OCR 실행
                 ocr_data = pytesseract.image_to_data(img, lang='kor', output_type=Output.DICT)
                 
                 n_boxes = len(ocr_data['level'])
@@ -119,20 +122,15 @@ def process_pdf(uploaded_file):
                     if not text:
                         continue
 
-                    # OCR 결과에서 키워드 검색
-                    # 1) "( )고등학교"
-                    if HIGH_SCHOOL_REGEX.search(text):
+                    if HIGH_SCHOOL_REGEX.search(text) or text in STUDENT_INFO_KEYWORDS:
                         (x, y, w, h) = (ocr_data['left'][i], ocr_data['top'][i], ocr_data['width'][i], ocr_data['height'][i])
-                        add_redaction_annot(page, fitz.Rect(x, y, x + w, y + h))
-                    
-                    # 2) "반", "번호", "성명"
-                    if text in STUDENT_INFO_KEYWORDS:
-                        (x, y, w, h) = (ocr_data['left'][i], ocr_data['top'][i], ocr_data['width'][i], ocr_data['height'][i])
-                        add_redaction_annot(page, fitz.Rect(x, y, x + w, y + h))
+                        # OCR 결과 좌표는 이미지 기준이므로 페이지 좌표로 변환해야 함
+                        img_rect = fitz.Rect(x, y, x + w, y + h)
+                        page_rect = img_rect * page.rect.width / img.width 
+                        add_redaction_annot(page, page_rect)
 
             except pytesseract.TesseractNotFoundError:
                 st.warning("Tesseract-OCR이 설치되지 않았거나 경로가 올바르지 않습니다. 스캔된 PDF의 텍스트 마스킹이 제한됩니다.", icon="⚠️")
-                # 오류를 발생시키지 않고 계속 진행
                 pass
             except Exception as e:
                 st.error(f"OCR 처리 중 오류가 발생했습니다: {e}")
@@ -159,7 +157,6 @@ st.write("""
 학교생활기록부 등 민감정보가 포함된 PDF 파일을 업로드하면, 주요 개인정보를 찾아 흰색으로 마스킹 처리한 후 다운로드할 수 있습니다.
 """)
 
-# 파일 업로더
 uploaded_file = st.file_uploader(
     "처리할 PDF 파일을 선택하세요 (최대 23페이지).",
     type="pdf",
@@ -170,17 +167,14 @@ if uploaded_file is not None:
     st.info(f"'{uploaded_file.name}' 파일이 업로드되었습니다. 잠시 후 마스킹이 시작됩니다...")
 
     with st.spinner("개인정보를 찾아 마스킹하는 중..."):
-        # PDF 처리 함수 호출
         processed_pdf_buffer = process_pdf(uploaded_file)
 
     if processed_pdf_buffer:
         st.success("✅ 마스킹 처리가 완료되었습니다!")
 
-        # 다운로드 파일명 생성
         original_filename = os.path.splitext(uploaded_file.name)[0]
         new_filename = f"(제거됨) {original_filename}.pdf"
 
-        # 다운로드 버튼 제공
         st.download_button(
             label="마스킹된 PDF 파일 다운로드",
             data=processed_pdf_buffer,
