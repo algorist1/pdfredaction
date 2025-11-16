@@ -1,227 +1,250 @@
+# main.py
+
 import streamlit as st
-import fitz  # PyMuPDF 라이브러리 (fitz로 import)
+import fitz  # PyMuPDF
 import pytesseract
 from pytesseract import Output
 from PIL import Image
 import io
 import os
+import re
+from shutil import which
 
-# --------------------------------------------------------------------------
-# [필수] Tesseract-OCR 경로 설정 (Windows 사용자)
-# --------------------------------------------------------------------------
-# Windows에서 Tesseract-OCR이 기본 경로에 설치되지 않은 경우, 아래 주석을 풀고
-# tesseract.exe 파일의 실제 경로를 지정해야 합니다. (예: r'C:\Program Files\Tesseract-OCR\tesseract.exe')
-# pytesseract.pytesseract.tesseract_cmd = r'' 
-# --------------------------------------------------------------------------
+# --- Configuration Section ---
 
-
-# --------------------------------------------------------------------------
-# [규칙 1] 1페이지 고정 좌표 (BBOX) 변수
-# A4 (595x842 pt) 기준이며, 예시 PDF 레이아웃을 기반으로 설정되었습니다.
-# --------------------------------------------------------------------------
+# [Rule 1] BBOX coordinates for redaction on Page 1.
+# Format: fitz.Rect(x0, y0, x1, y1)
+# These coordinates were carefully selected to cover sensitive data on the fixed form
+# without overlapping table borders.
 PAGE_1_BBOXES = [
-    # 1. 사진 영역 (예시 이미지 기준)
-    fitz.Rect(70, 65, 185, 215),
-    
-    # 2. 상단 표 (학년/반/번호/담임 값 영역) - 1, 2, 3학년 모두 포함
-    # 1학년: 반/번호/담임
-    fitz.Rect(370, 93, 405, 107), fitz.Rect(428, 93, 460, 107), fitz.Rect(480, 93, 560, 107),
-    # 2학년: 반/번호/담임
-    fitz.Rect(370, 110, 405, 124), fitz.Rect(428, 110, 460, 124), fitz.Rect(480, 110, 560, 124),
-    # 3학년: 반/번호/담임
-    fitz.Rect(370, 127, 405, 141), fitz.Rect(428, 127, 460, 141), fitz.Rect(480, 127, 560, 141),
-
-    # 3. '1. 인적·학적사항' 표 (성명, 주민등록번호, 주소, 학적사항, 특기사항의 값 영역)
-    fitz.Rect(115, 178, 560, 220), # 학생정보 (성명, 성별, 주민등록번호, 주소)
-    fitz.Rect(115, 222, 560, 260), # 학적사항
-    fitz.Rect(115, 262, 560, 280), # 특기사항
+    # 1. Photo Area
+    fitz.Rect(465, 55, 560, 182),
+    # 2. Top Table Values
+    fitz.Rect(325, 105, 380, 120),  # Class (반) & Number (번호)
+    fitz.Rect(480, 105, 550, 120),  # Homeroom Teacher (담임성명)
+    # 3. Personal & Academic Info Table Values
+    fitz.Rect(120, 205, 180, 220),  # Name (성명)
+    fitz.Rect(280, 205, 320, 220),  # Gender (성별)
+    fitz.Rect(430, 205, 550, 220),  # Resident Registration Number (주민등록번호)
+    fitz.Rect(120, 225, 550, 245),  # Address (주소)
+    fitz.Rect(120, 250, 550, 285),  # Academic Status (학적사항)
+    fitz.Rect(120, 290, 550, 310),  # Special Notes (특기사항)
 ]
 
-# --------------------------------------------------------------------------
-# [규칙 2/3] 마스킹 대상 키워드 및 예외 영역
-# --------------------------------------------------------------------------
-# [규칙 2] 텍스트 검색 대상 키워드
-KEYWORDS_TO_MASK = [
-    "고등학교", # "( )고등학교"를 찾기 위한 핵심 키워드
-    "반", 
-    "번호", 
-    "성명",
-    "상명대학교사범대학부속여자고등학교장", 
-    "대성고등학교" 
-]
+# [Rule 2 & 3] Text patterns for redaction
+# The school name is a specific target for redaction across the document.
+SCHOOL_NAME_TEXT = "대성고등학교"
+# Footer personal info is also targeted.
+FOOTER_PII_KEYWORDS = ["반", "번호", "성명"]
 
-# 마스킹 제외 영역
-TITLE_RECT = fitz.Rect(50, 20, 550, 50)  # 1페이지 상단 제목 제외 영역
-PAGE_NUM_EXCLUSION_RECT = fitz.Rect(250, 800, 350, 842) # 중앙 하단 페이지 번호 제외 영역
+# OCR confidence threshold. Detections below this are ignored.
+OCR_CONFIDENCE_THRESHOLD = 40
+# Heuristic to determine if a PDF is scanned (image-based)
+# If a page has fewer than this number of text blocks, we trigger OCR.
+SCANNED_PDF_TEXT_BLOCK_THRESHOLD = 10
+# DPI for rendering PDF pages to images for OCR
+OCR_DPI = 300
 
-# --------------------------------------------------------------------------
-# 핵심 로직: PDF 마스킹 처리 함수
-# --------------------------------------------------------------------------
-def mask_pdf(input_pdf_stream):
-    """PDF 스트림을 받아 하이브리드 방식으로 민감정보를 마스킹한 PDF의 바이트를 반환합니다."""
+# --- Tesseract-OCR Availability Check ---
+
+def is_tesseract_available():
+    """
+    Checks if the Tesseract-OCR executable is in the system's PATH.
+    """
+    return which("tesseract") is not None
+
+TESSERACT_INSTALLED = is_tesseract_available()
+
+# --- Redaction Logic Functions ---
+
+def redact_page_by_coordinates(page):
+    """
+    [Rule 1] Applies fixed-coordinate redactions to a page.
+    This is highly reliable for fixed-form documents.
+    """
+    for rect in PAGE_1_BBOXES:
+        page.add_redact_annot(rect, fill=(1, 1, 1))
+
+def redact_page_by_text_search(page):
+    """
+    [Rule 2] Searches for and redacts specific text strings.
+    Effective for digital (text-based) PDFs.
+    Returns the number of redactions made.
+    """
+    redaction_count = 0
+    # 1. Redact the specific high school name
+    sensitive_areas = page.search_for(SCHOOL_NAME_TEXT)
+    redaction_count += len(sensitive_areas)
+    for area in sensitive_areas:
+        page.add_redact_annot(area, fill=(1, 1, 1))
+
+    # 2. Redact the footer PII block
+    # Find the bounding box of all keywords together for a single redaction
+    footer_rects = []
+    for keyword in FOOTER_PII_KEYWORDS:
+        footer_rects.extend(page.search_for(keyword))
     
+    if footer_rects:
+        # Create a single bounding box that envelops all found keyword rects
+        # This prevents redacting just "반" and leaving the student's name visible.
+        combined_rect = fitz.Rect(footer_rects[0].tl, footer_rects[0].br)
+        for rect in footer_rects[1:]:
+            combined_rect.include_rect(rect)
+        
+        # Don't redact the page number in the center
+        if combined_rect.y0 > 750: # Only apply to footer region
+             # Expand the redaction to cover values next to the labels
+            combined_rect.x1 += 100 
+            page.add_redact_annot(combined_rect, fill=(1, 1, 1))
+            redaction_count += 1
+            
+    return redaction_count
+
+def redact_page_by_ocr(page):
+    """
+    [Rule 3] Performs OCR and redacts text found in the resulting image data.
+    Essential for scanned (image-based) PDFs.
+    """
+    if not TESSERACT_INSTALLED:
+        st.warning("Tesseract-OCR is not installed or not in PATH. OCR-based redaction is disabled.", icon="⚠️")
+        return
+
+    # 1. Render page to a high-resolution image
+    pix = page.get_pixmap(dpi=OCR_DPI)
+    img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+
+    # 2. Perform OCR
     try:
-        # 1. 원본 PDF와 출력용 빈 PDF 문서 객체 생성
-        doc = fitz.open(stream=input_pdf_stream.read(), filetype="pdf")
-        output_doc = fitz.open()
+        ocr_data = pytesseract.image_to_data(
+            img, lang='kor', output_type=Output.DICT
+        )
+    except pytesseract.TesseractError as e:
+        st.error(f"Tesseract OCR Error: {e}. Please ensure Tesseract is installed with the Korean language pack.", icon="🚨")
+        return
 
-        tesseract_available = True 
-        ocr_warning_shown = False 
+    # 3. Process OCR results and apply redactions
+    num_boxes = len(ocr_data['level'])
+    redaction_rects = []
 
-        # 2. 페이지 순회 (최대 23페이지 제한)
-        for page_num, page in enumerate(doc):
-            if page_num >= 23:
-                break
-            
-            # **[수정]** 원본 페이지를 output_doc에 복사하고, 새로 추가된 페이지(new_page)를 참조
-            # PyMuPDF에서 페이지를 복사하는 올바른 방법은 Document 객체의 insert_pdf 메서드를 사용하는 것입니다.
-            output_doc.insert_pdf(doc, from_page=page_num, to_page=page_num)
-            new_page = output_doc[-1] # 새로 추가된 (가장 마지막) 페이지를 가져옵니다.
+    for i in range(num_boxes):
+        text = ocr_data['text'][i]
+        conf = int(ocr_data['conf'][i])
 
-            # --- [규칙 1] 1페이지 고정 좌표 마스킹 ---
-            if page_num == 0:
-                for rect in PAGE_1_BBOXES:
-                    new_page.add_redact_annot(rect, text=" ", fill=(1, 1, 1)) # 흰색 채우기
+        # Skip low-confidence detections
+        if conf < OCR_CONFIDENCE_THRESHOLD or not text.strip():
+            continue
+        
+        # Target 1: School Name
+        if SCHOOL_NAME_TEXT in text:
+            (x, y, w, h) = (ocr_data['left'][i], ocr_data['top'][i], ocr_data['width'][i], ocr_data['height'][i])
+            # Scale coordinates back to PDF's coordinate system
+            bbox = fitz.Rect(x, y, x + w, y + h) / (OCR_DPI / 72)
+            redaction_rects.append(bbox)
 
-            # --- [규칙 2] 텍스트 검색 기반 마스킹 (디지털 PDF) ---
-            text_instances = []
-            # 1~2, 5~6 페이지와 모든 페이지 하단에서 키워드 검색
-            is_relevant_page = (page_num <= 1) or (4 <= page_num <= 5) or True # 모든 페이지 하단
-            
-            if is_relevant_page:
-                for keyword in KEYWORDS_TO_MASK:
-                    # 텍스트를 검색하여 인스턴스(BBOX) 목록을 가져옴
-                    text_instances.extend(new_page.search_for(keyword, quads=False))
+        # Target 2: Footer PII (focus on keywords)
+        if any(keyword in text for keyword in FOOTER_PII_KEYWORDS):
+             (x, y, w, h) = (ocr_data['left'][i], ocr_data['top'][i], ocr_data['width'][i], ocr_data['height'][i])
+             bbox = fitz.Rect(x, y, x + w, y + h) / (OCR_DPI / 72)
+             # Check if it's in the footer area to avoid redacting content
+             if bbox.y0 > 750:
+                # Also redact the value that follows the keyword
+                # Heuristic: find the next word on the same line
+                if i + 1 < num_boxes and ocr_data['line_num'][i] == ocr_data['line_num'][i+1]:
+                    (x2, y2, w2, h2) = (ocr_data['left'][i+1], ocr_data['top'][i+1], ocr_data['width'][i+1], ocr_data['height'][i+1])
+                    bbox2 = fitz.Rect(x2, y2, x2 + w2, y2 + h2) / (OCR_DPI / 72)
+                    bbox.include_rect(bbox2) # Combine keyword and value rect
+                redaction_rects.append(bbox)
 
-            digital_text_found = bool(text_instances)
-
-            for inst in text_instances:
-                # 예외 처리: 제목 영역과 페이지 번호 영역은 마스킹하지 않음
-                if (page_num == 0 and inst.intersects(TITLE_RECT)) or inst.intersects(PAGE_NUM_EXCLUSION_RECT):
-                    continue
-                
-                # 1페이지의 경우, [규칙 1]의 고정 좌표 영역과 겹치면 중복 마스킹 방지
-                if page_num == 0:
-                    is_in_bbox = False
-                    for bbox in PAGE_1_BBOXES:
-                        # 텍스트 검색 결과가 고정 좌표 영역 안에 완전히 포함되면 중복 처리로 간주
-                        if inst in bbox: 
-                            is_in_bbox = True
-                            break
-                    if is_in_bbox:
-                        continue
-                
-                new_page.add_redact_annot(inst, text=" ", fill=(1, 1, 1))
-
-            # --- [규칙 3] OCR 기반 마스킹 (스캔된 PDF) ---
-            # (디지털 텍스트 검색 결과가 거의 없고, Tesseract가 사용 가능한 경우)
-            # 1페이지는 이미 [규칙 1]로 주요 인적사항 처리됨
-            if not digital_text_found and page_num > 0 and tesseract_available:
-                try:
-                    # 페이지를 고해상도 이미지로 변환 (DPI 300)
-                    pix = page.get_pixmap(dpi=300)
-                    img = Image.open(io.BytesIO(pix.tobytes("png")))
-
-                    # OCR 실행 (한국어)
-                    ocr_data = pytesseract.image_to_data(img, lang='kor', output_type=Output.DICT)
-                    
-                    # OCR 좌표(픽셀)를 PDF 좌표(pt)로 변환하기 위한 스케일 계산
-                    scale_x = page.rect.width / img.width
-                    scale_y = page.rect.height / img.height
-
-                    for i in range(len(ocr_data['text'])):
-                        conf = int(ocr_data['conf'][i])
-                        text = ocr_data['text'][i].strip()
-                        
-                        # 신뢰도 50 이상이고, 마스킹 대상 키워드가 포함된 경우
-                        if conf > 50 and text and any(k in text for k in KEYWORDS_TO_MASK):
-                            
-                            l, t, w, h = ocr_data['left'][i], ocr_data['top'][i], ocr_data['width'][i], ocr_data['height'][i]
-                            # OCR 좌표를 PDF 좌표로 변환
-                            bbox = fitz.Rect(l * scale_x, t * scale_y, (l + w) * scale_x, (t + h) * scale_y)
-
-                            # 페이지 번호 영역 예외 처리
-                            if bbox.intersects(PAGE_NUM_EXCLUSION_RECT):
-                                continue
-                            
-                            new_page.add_redact_annot(bbox, text=" ", fill=(1, 1, 1))
-
-                except pytesseract.TesseractNotFoundError:
-                    tesseract_available = False
-                    if not ocr_warning_shown:
-                        st.warning("Tesseract-OCR이 감지되지 않았습니다. 스캔된 PDF의 마스킹(OCR)이 비활성화됩니다.")
-                        ocr_warning_shown = True
-                except Exception:
-                    # 한국어 데이터팩 누락 등의 기타 OCR 오류
-                    if not ocr_warning_shown:
-                        st.warning(f"OCR 처리 중 오류 발생 (페이지 {page_num + 1}): 텍스트 인식 불가. Tesseract 설치 및 'kor' 데이터팩을 확인하세요.")
-                        ocr_warning_shown = True
-                    tesseract_available = False
-
-            # 4. 해당 페이지의 모든 마스킹(Redaction Annotation)을 최종 적용
-            new_page.apply_redactions()
-
-        # 5. 마스킹 완료된 PDF를 바이트로 반환
-        output_bytes = output_doc.tobytes()
-        return output_bytes
-
-    except Exception as e:
-        # Streamlit 에러 출력 전에 문서 닫기
-        if 'doc' in locals() and doc:
-            doc.close()
-        if 'output_doc' in locals() and output_doc:
-            output_doc.close()
-        # 오류 메시지 출력
-        st.error(f"PDF 처리 중 예상치 못한 오류가 발생했습니다: {e}")
-        return None
-    finally:
-        # 최종적으로 문서 닫기 (오류가 발생했더라도)
-        if 'doc' in locals() and doc:
-            doc.close()
-        if 'output_doc' in locals() and output_doc:
-            output_doc.close()
+    # Apply all found redactions for this page
+    for rect in redaction_rects:
+        page.add_redact_annot(rect, fill=(1, 1, 1))
 
 
-# --------------------------------------------------------------------------
-# Streamlit UI 구성
-# --------------------------------------------------------------------------
+# --- Main Streamlit Application ---
 
-st.set_page_config(page_title="PDF 민감정보 마스킹", layout="wide")
-st.title("🛡️ PDF 민감정보 자동 마스킹 앱 (학기록 용)")
+def main():
+    st.set_page_config(
+        page_title="PDF Personal Info Redactor",
+        page_icon="🔒",
+        layout="centered"
+    )
 
-# Tesseract-OCR 설치 안내
-with st.expander("⚠️ Tesseract-OCR 설치 안내 (스캔 PDF 처리 필수)"):
+    st.title("🔒 PDF Personal Information Redactor")
     st.markdown("""
-    스캔된(이미지) PDF를 처리하려면 **Tesseract-OCR 엔진**과 **한국어(kor) 데이터팩**이 시스템에 설치되어 있어야 합니다.
-    
-    * **Windows**: [Tesseract 공식 사이트](https://github.com/UB-Mannheim/tesseract/wiki)에서 설치 후, 설치 경로를 시스템 PATH에 추가하거나 코드 상단에 명시해야 합니다. **'Korean' 언어팩을 반드시 포함**하여 설치하세요.
-    * **macOS (Homebrew)**: `brew install tesseract tesseract-lang`
-    * **Linux (Ubuntu)**: `sudo apt-get install tesseract-ocr tesseract-ocr-kor`
-    
-    Tesseract가 없어도 **1페이지 고정 좌표 마스킹**과 **디지털 텍스트 마스킹**은 정상 작동합니다.
+        Upload a Korean school record PDF to automatically redact sensitive personal information.
+        This tool uses a hybrid approach:
+        1.  **Fixed Coordinates**: For known fields on Page 1.
+        2.  **Text Search**: For digital PDFs.
+        3.  **OCR (Tesseract)**: For scanned (image-based) PDFs.
     """)
 
-# 파일 업로드 인터페이스
-uploaded_file = st.file_uploader(
-    "민감정보를 제거할 PDF 파일을 업로드하세요 (최대 23페이지).",
-    type=["pdf"]
-)
+    if not TESSERACT_INSTALLED:
+        st.error("**OCR functionality unavailable.** Tesseract-OCR engine not found in your system's PATH. The application will proceed with fixed-coordinate and text-search redaction only.", icon="🚨")
 
-if uploaded_file is not None:
-    original_filename = uploaded_file.name
-    
-    # 마스킹 처리 실행
-    with st.spinner(f"**{original_filename}** 파일을 분석하고 민감정보를 마스킹 중입니다..."):
-        masked_pdf_bytes = mask_pdf(uploaded_file)
-    
-    if masked_pdf_bytes:
-        st.success("✅ 마스킹 처리가 완료되었습니다!")
-        
-        # 다운로드 버튼
-        new_filename = f"(제거됨){original_filename}"
-        st.download_button(
-            label="마스킹된 PDF 파일 다운로드",
-            data=masked_pdf_bytes,
-            file_name=new_filename,
-            mime="application/pdf"
-        )
+
+    uploaded_file = st.file_uploader(
+        "Choose a PDF file (up to 23 pages)",
+        type="pdf",
+        accept_multiple_files=False
+    )
+
+    if uploaded_file is not None:
+        try:
+            # Read the uploaded file into memory
+            pdf_bytes = uploaded_file.getvalue()
+            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+
+            total_text_redactions = 0
+            is_likely_scanned = True
+
+            # --- Start Redaction Process ---
+            with st.spinner('Processing PDF... This may take a moment for scanned documents.'):
+                for i, page in enumerate(doc):
+                    # [Rule 1] Apply fixed BBOX redactions only to the first page (page index 0)
+                    if i == 0:
+                        redact_page_by_coordinates(page)
+
+                    # [Rule 2] Apply text search redaction
+                    text_redactions_on_page = redact_page_by_text_search(page)
+                    total_text_redactions += text_redactions_on_page
+                    
+                    # Heuristic: Check if the document seems to be text-based
+                    if len(page.get_text("blocks")) > SCANNED_PDF_TEXT_BLOCK_THRESHOLD:
+                        is_likely_scanned = False
+                    
+                    # Apply all redactions added so far for this page
+                    # We do this before OCR to avoid double-work
+                    page.apply_redactions()
+
+                # [Rule 3] Trigger OCR if the document seems scanned
+                if is_likely_scanned and TESSERACT_INSTALLED:
+                    st.info("Digital text not found. Activating OCR for deeper analysis...", icon="📄")
+                    for page in doc:
+                        # OCR is compute-intensive, so we re-apply here
+                        # Note: Page 1 PII is already gone, OCR will primarily find school names
+                        redact_page_by_ocr(page)
+                        page.apply_redactions()
+
+                # Save the final redacted PDF to a byte stream
+                output_bytes = io.BytesIO()
+                doc.save(output_bytes, garbage=4, deflate=True, clean=True)
+                output_bytes.seek(0)
+                doc.close()
+
+            st.success("✅ Redaction process completed successfully!", icon="🎉")
+
+            # Provide the download button
+            new_filename = f"(REDACTED)_{uploaded_file.name}"
+            st.download_button(
+                label="📥 Download Redacted PDF",
+                data=output_bytes,
+                file_name=new_filename,
+                mime="application/pdf"
+            )
+
+        except Exception as e:
+            st.error(f"An error occurred during PDF processing: {e}", icon="🚨")
+            st.error("Please ensure you have uploaded a valid, non-corrupted PDF file.")
+
+if __name__ == "__main__":
+    main()
