@@ -151,10 +151,10 @@ def process_pdf(uploaded_file):
 # --- Streamlit UI 구성 ---
 
 st.set_page_config(page_title="PDF 개인정보 마스킹 앱", page_icon="📄")
-st.title("📄 PDF 개인정보 자동 마스킹")
+st.title("🪄 PDF 개인정보 마스킹 도구")
 st.write("""
-30년 경력 개발자가 만든 PDF 개인정보 처리기입니다.
-학교생활기록부 등 민감정보가 포함된 PDF 파일을 업로드하면, 주요 개인정보를 찾아 흰색으로 마스킹 처리한 후 다운로드할 수 있습니다.
+1️⃣ 나이스에서 다운로드한 학생부 PDF 파일을 업로드 후, 주요 개인정보 마스킹 처리
+2️⃣ 단, 스캔한 PDF는 Tesseract-OCR를 설치 후 사용, 그렇치 않으면 수상경력과 봉사실적란에 학교명이 노출됨 
 """)
 
 uploaded_file = st.file_uploader(
@@ -164,7 +164,7 @@ uploaded_file = st.file_uploader(
 )
 
 if uploaded_file is not None:
-    st.info(f"'{uploaded_file.name}' 파일이 업로드되었습니다. 잠시 후 마스킹이 시작됩니다...")
+    st.info(f"'{uploaded_file.name}' 파일이 업로드 되었습니다. 잠시 후, 마스킹이 시작됩니다...")
 
     with st.spinner("개인정보를 찾아 마스킹하는 중..."):
         processed_pdf_buffer = process_pdf(uploaded_file)
