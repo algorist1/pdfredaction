@@ -158,7 +158,7 @@ st.write("""
 """)
 
 uploaded_file = st.file_uploader(
-    "처리할 PDF 파일을 선택하세요.(최대 23페이지 내외)",
+    "처리할 PDF 파일을 선택하세요. (최대 23페이지 내외)",
     type="pdf",
     accept_multiple_files=False
 )
