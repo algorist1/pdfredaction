@@ -13,23 +13,27 @@ from shutil import which
 # --- Configuration Section ---
 
 # [Rule 1] BBOX coordinates for redaction on Page 1.
-# !IMPORTANT!: These coordinates are specifically calibrated for the
-# "상명대학교사범대학부속여자고등학교" template provided by the user.
+# !IMPORTANT!: These coordinates are calibrated for the LATEST '대성고등학교'
+# document template provided by the user.
 PAGE_1_BBOXES = [
-    # This new configuration targets the second document template.
-    # Note: Photo area is not present in this template.
-    # Personal & Academic Info Table Values (인적·학적사항)
-    fitz.Rect(125, 162, 220, 180),  # 성명 (Name) Value Box
-    fitz.Rect(295, 162, 385, 180),  # 성별 (Gender) Value Box
-    fitz.Rect(495, 162, 570, 180),  # 주민등록번호 (RRN) Value Box
-    fitz.Rect(125, 185, 570, 205),  # 주소 (Address) Value Box
-    fitz.Rect(125, 208, 570, 228),  # 학적사항 (Academic Status) Value Box
-    fitz.Rect(125, 231, 570, 251),  # 특기사항 (Special Notes) Value Box
+    # Top Right Photo Area
+    fitz.Rect(460, 50, 570, 185),
+
+    # Top Table (redacting empty value cells for privacy)
+    fitz.Rect(325, 80, 420, 100),   # 반 (Class) Value Area
+    fitz.Rect(480, 80, 570, 100),   # 성명 (Name) Value Area
+
+    # 1. 인적·학적사항 (Personal & Academic Info) Section
+    fitz.Rect(130, 320, 200, 336),  # 성명 (Name) Value
+    fitz.Rect(290, 320, 340, 336),  # 성별 (Gender) Value
+    fitz.Rect(485, 320, 575, 336),  # 주민등록번호 (RRN) Value
+    fitz.Rect(130, 340, 575, 358),  # 주소 (Address) Value
+    fitz.Rect(130, 362, 575, 398),  # 학적사항 (Academic Status) Value (covers both lines)
 ]
 
 # [Rule 2 & 3] Text patterns for redaction
-# Updated to the new school name from the second template.
-SCHOOL_NAME_TEXT = "상명대학교사범대학부속여자고등학교"
+# Reverted to the correct school name for this template.
+SCHOOL_NAME_TEXT = "대성고등학교"
 FOOTER_PII_KEYWORDS = ["반", "번호", "성명"]
 
 # OCR confidence threshold
@@ -102,8 +106,7 @@ def redact_page_by_ocr(page):
         if conf < OCR_CONFIDENCE_THRESHOLD or not text.strip():
             continue
         
-        # Search for parts of the school name as OCR might break it up
-        if "상명대학교" in text or "사범대학" in text or "여자고등학교" in text:
+        if SCHOOL_NAME_TEXT in text:
             (x, y, w, h) = (ocr_data['left'][i], ocr_data['top'][i], ocr_data['width'][i], ocr_data['height'][i])
             bbox = fitz.Rect(x, y, x + w, y + h) / (OCR_DPI / 72)
             redaction_rects.append(bbox)
@@ -133,7 +136,7 @@ def main():
     st.title("🔒 PDF Personal Information Redactor")
     st.markdown("""
         Upload a Korean school record PDF to automatically redact sensitive personal information.
-        **Note**: This tool is currently calibrated for the '상명대학교사범대학부속여자고등학교' document format.
+        **Note**: This tool's coordinate-based redaction is calibrated for a specific document format. Results may vary on different templates.
     """)
 
     if not TESSERACT_INSTALLED:
