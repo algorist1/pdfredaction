@@ -13,26 +13,23 @@ from shutil import which
 # --- Configuration Section ---
 
 # [Rule 1] BBOX coordinates for redaction on Page 1.
-# Format: fitz.Rect(x0, y0, x1, y1)
-# Coordinates have been reviewed and PRECISION-ADJUSTED based on user feedback.
+# !IMPORTANT!: These coordinates are specifically calibrated for the
+# "상명대학교사범대학부속여자고등학교" template provided by the user.
 PAGE_1_BBOXES = [
-    # 1. Photo Area
-    fitz.Rect(465, 55, 560, 182),
-    # 2. Top Table Values (Class, Number, Teacher)
-    fitz.Rect(325, 105, 380, 120),  # Class (반) & Number (번호)
-    fitz.Rect(480, 105, 550, 120),  # Homeroom Teacher (담임성명)
-    # 3. Personal & Academic Info Table Values
-    fitz.Rect(120, 205, 180, 220),  # Name (성명)
-    fitz.Rect(280, 205, 320, 220),  # Gender (성별)
-    fitz.Rect(430, 205, 550, 220),  # Resident Registration Number (주민등록번호)
-    # [ADJUSTED] Coordinates for Address and Academic Status made more precise
-    fitz.Rect(120, 224, 555, 246),  # Address (주소)
-    fitz.Rect(120, 249, 555, 286),  # Academic Status (학적사항) - covers both lines
-    fitz.Rect(120, 290, 550, 310),  # Special Notes (특기사항)
+    # This new configuration targets the second document template.
+    # Note: Photo area is not present in this template.
+    # Personal & Academic Info Table Values (인적·학적사항)
+    fitz.Rect(125, 162, 220, 180),  # 성명 (Name) Value Box
+    fitz.Rect(295, 162, 385, 180),  # 성별 (Gender) Value Box
+    fitz.Rect(495, 162, 570, 180),  # 주민등록번호 (RRN) Value Box
+    fitz.Rect(125, 185, 570, 205),  # 주소 (Address) Value Box
+    fitz.Rect(125, 208, 570, 228),  # 학적사항 (Academic Status) Value Box
+    fitz.Rect(125, 231, 570, 251),  # 특기사항 (Special Notes) Value Box
 ]
 
 # [Rule 2 & 3] Text patterns for redaction
-SCHOOL_NAME_TEXT = "대성고등학교"
+# Updated to the new school name from the second template.
+SCHOOL_NAME_TEXT = "상명대학교사범대학부속여자고등학교"
 FOOTER_PII_KEYWORDS = ["반", "번호", "성명"]
 
 # OCR confidence threshold
@@ -59,10 +56,8 @@ def redact_page_by_coordinates(page):
 
 def redact_page_by_text_search(page):
     """[Rule 2] Searches for and redacts specific text strings."""
-    redaction_count = 0
     # 1. Redact the specific high school name
     sensitive_areas = page.search_for(SCHOOL_NAME_TEXT)
-    redaction_count += len(sensitive_areas)
     for area in sensitive_areas:
         page.add_redact_annot(area, fill=(1, 1, 1))
 
@@ -76,12 +71,9 @@ def redact_page_by_text_search(page):
         for rect in footer_rects[1:]:
             combined_rect.include_rect(rect)
         
-        if combined_rect.y0 > 750:
+        if combined_rect.y0 > 750: # Only apply to footer region
             combined_rect.x1 += 100 
             page.add_redact_annot(combined_rect, fill=(1, 1, 1))
-            redaction_count += 1
-            
-    return redaction_count
 
 def redact_page_by_ocr(page):
     """[Rule 3] Performs OCR and redacts text found in the resulting image data."""
@@ -110,7 +102,8 @@ def redact_page_by_ocr(page):
         if conf < OCR_CONFIDENCE_THRESHOLD or not text.strip():
             continue
         
-        if SCHOOL_NAME_TEXT in text:
+        # Search for parts of the school name as OCR might break it up
+        if "상명대학교" in text or "사범대학" in text or "여자고등학교" in text:
             (x, y, w, h) = (ocr_data['left'][i], ocr_data['top'][i], ocr_data['width'][i], ocr_data['height'][i])
             bbox = fitz.Rect(x, y, x + w, y + h) / (OCR_DPI / 72)
             redaction_rects.append(bbox)
@@ -140,17 +133,14 @@ def main():
     st.title("🔒 PDF Personal Information Redactor")
     st.markdown("""
         Upload a Korean school record PDF to automatically redact sensitive personal information.
-        This tool uses a hybrid approach:
-        1.  **Fixed Coordinates**: For known fields on Page 1.
-        2.  **Text Search**: For digital PDFs.
-        3.  **OCR (Tesseract)**: For scanned (image-based) PDFs.
+        **Note**: This tool is currently calibrated for the '상명대학교사범대학부속여자고등학교' document format.
     """)
 
     if not TESSERACT_INSTALLED:
         st.error("**OCR functionality unavailable.** Tesseract-OCR engine not found in your system's PATH. The application will proceed with fixed-coordinate and text-search redaction only.", icon="🚨")
 
     uploaded_file = st.file_uploader(
-        "Choose a PDF file (up to 23 pages)",
+        "Choose a PDF file",
         type="pdf",
         accept_multiple_files=False
     )
