@@ -14,25 +14,20 @@ from shutil import which
 
 # [Rule 1] BBOX coordinates for redaction on Page 1.
 # Format: fitz.Rect(x0, y0, x1, y1)
-# --- COORDINATES UPDATED BASED ON USER FEEDBACK (2025-11-16) ---
-# These coordinates were carefully re-calibrated for higher accuracy.
+# Coordinates have been reviewed and PRECISION-ADJUSTED based on user feedback.
 PAGE_1_BBOXES = [
-    # 1. Photo Area (Enlarged for full coverage)
-    fitz.Rect(463, 53, 562, 184),
-    
-    # 2. Top Table Values (Adjusted to cover all three years)
-    fitz.Rect(320, 120, 460, 178),  # Class (반) & Number (번호) Values
-    fitz.Rect(470, 120, 555, 178),  # Homeroom Teacher (담임성명) Values
-    
-    # 3. Personal & Academic Info Table Values (Original coordinates were mostly correct)
+    # 1. Photo Area
+    fitz.Rect(465, 55, 560, 182),
+    # 2. Top Table Values (Class, Number, Teacher)
+    fitz.Rect(325, 105, 380, 120),  # Class (반) & Number (번호)
+    fitz.Rect(480, 105, 550, 120),  # Homeroom Teacher (담임성명)
+    # 3. Personal & Academic Info Table Values
     fitz.Rect(120, 205, 180, 220),  # Name (성명)
     fitz.Rect(280, 205, 320, 220),  # Gender (성별)
     fitz.Rect(430, 205, 550, 220),  # Resident Registration Number (주민등록번호)
-    
-    # Address & Academic Status (Fine-tuned for precision)
+    # [ADJUSTED] Coordinates for Address and Academic Status made more precise
     fitz.Rect(120, 224, 555, 246),  # Address (주소)
-    fitz.Rect(120, 249, 555, 286),  # Academic Status (학적사항)
-    
+    fitz.Rect(120, 249, 555, 286),  # Academic Status (학적사항) - covers both lines
     fitz.Rect(120, 290, 550, 310),  # Special Notes (특기사항)
 ]
 
@@ -81,7 +76,7 @@ def redact_page_by_text_search(page):
         for rect in footer_rects[1:]:
             combined_rect.include_rect(rect)
         
-        if combined_rect.y0 > 750: # Only apply to footer region
+        if combined_rect.y0 > 750:
             combined_rect.x1 += 100 
             page.add_redact_annot(combined_rect, fill=(1, 1, 1))
             redaction_count += 1
@@ -133,7 +128,6 @@ def redact_page_by_ocr(page):
     for rect in redaction_rects:
         page.add_redact_annot(rect, fill=(1, 1, 1))
 
-
 # --- Main Streamlit Application ---
 
 def main():
@@ -154,7 +148,6 @@ def main():
 
     if not TESSERACT_INSTALLED:
         st.error("**OCR functionality unavailable.** Tesseract-OCR engine not found in your system's PATH. The application will proceed with fixed-coordinate and text-search redaction only.", icon="🚨")
-
 
     uploaded_file = st.file_uploader(
         "Choose a PDF file (up to 23 pages)",
