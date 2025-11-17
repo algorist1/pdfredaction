@@ -8,9 +8,9 @@ import os
 import re
 
 # --- Tesseract-OCR 경로 설정 ---
-# Windows 사용자: 아래 경로가 실제 설치 경로와 다르다면 수정하세요
-# macOS/Linux 사용자: 이 줄을 주석 처리하세요
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+# Streamlit Cloud 배포 시에는 경로 지정이 필요 없음 (자동 인식)
+# 로컬 Windows에서만 테스트할 때는 아래 주석 해제
+# pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 # --- 1. 마스킹 좌표 설정 (규칙 1) ---
 # 사용자가 쉽게 수정할 수 있도록 좌표 변수를 상단에 모음
