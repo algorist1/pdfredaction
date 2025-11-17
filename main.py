@@ -7,9 +7,10 @@ import io
 import os
 import re
 
-# --- Tesseract-OCR 경로 설정 (선택 사항) ---
-# 시스템 PATH에 Tesseract 경로가 없는 경우, 아래 주석을 해제하고 직접 경로를 지정하세요.
-# 예: pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+# --- Tesseract-OCR 경로 설정 ---
+# Windows 사용자: 아래 경로가 실제 설치 경로와 다르다면 수정하세요
+# macOS/Linux 사용자: 이 줄을 주석 처리하세요
+pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 # --- 1. 마스킹 좌표 설정 (규칙 1) ---
 # 사용자가 쉽게 수정할 수 있도록 좌표 변수를 상단에 모음
@@ -136,7 +137,7 @@ def process_pdf(uploaded_file):
             except pytesseract.TesseractNotFoundError:
                 # 경고 메시지를 한 번만 표시
                 if not tesseract_warning_shown:
-                    st.warning("Tesseract-OCR이 설치되지 않았거나 경로가 올바르지 않습니다. 이 경우, 스캔된 PDF의 텍스트 마스킹이 제한됩니다.", icon="⚠️")
+                    st.warning("Tesseract-OCR이 설치되지 않았거나 경로가 올바르지 않습니다. 스캔된 PDF의 텍스트 마스킹이 제한됩니다.", icon="⚠️")
                     tesseract_warning_shown = True
                 pass
             except Exception as e:
