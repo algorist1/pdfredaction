@@ -1,4 +1,6 @@
+# requirements.txt
 streamlit
 PyMuPDF
 pytesseract
 Pillow
+opencv-python-headless
