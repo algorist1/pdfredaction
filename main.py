@@ -115,7 +115,12 @@ def process_pdf(uploaded_file):
                 text_found = True
 
         # [규칙 3] OCR 기반 마스킹 (스캔된 PDF)
-        if not text_found and page_num > 0:
+        # 1~6페이지(0~5)만 OCR 실행 (성능 최적화)
+        # - 1~2페이지: 수상경력의 "고등학교"
+        # - 5~6페이지: 봉사활동의 "고등학교"
+        should_run_ocr = page_num <= 5 and ((not text_found) or (page_num in [0, 1, 4, 5]))
+        
+        if should_run_ocr:
             try:
                 pix = page.get_pixmap(dpi=300)
                 img = Image.open(io.BytesIO(pix.tobytes("png")))
@@ -127,9 +132,10 @@ def process_pdf(uploaded_file):
                     if not text:
                         continue
 
-                    if HIGH_SCHOOL_REGEX.search(text) or text in STUDENT_INFO_KEYWORDS:
+                    # "고등학교"가 포함된 단어 찾기
+                    if HIGH_SCHOOL_REGEX.search(text):
                         (x, y, w, h) = (ocr_data['left'][i], ocr_data['top'][i], ocr_data['width'][i], ocr_data['height'][i])
-                        # OCR 결과 좌표는 이미지 기준이므로 페이지 좌표로 변환해야 함
+                        # OCR 결과 좌표는 이미지 기준이므로 페이지 좌표로 변환
                         img_rect = fitz.Rect(x, y, x + w, y + h)
                         page_rect = img_rect * page.rect.width / img.width 
                         add_redaction_annot(page, page_rect)
