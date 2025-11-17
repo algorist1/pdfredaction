@@ -62,6 +62,10 @@ def add_redaction_annot(page, rect):
 
 def process_pdf(uploaded_file):
     """PDF 파일을 읽어 민감정보를 마스킹하고 새로운 PDF 파일을 반환하는 메인 함수"""
+    
+    # OCR 경고 메시지를 한 번만 표시하기 위한 플래그
+    tesseract_warning_shown = False
+    
     try:
         # 업로드된 파일 데이터를 BytesIO로 읽어 fitz에서 열기
         pdf_data = uploaded_file.read()
@@ -130,7 +134,10 @@ def process_pdf(uploaded_file):
                         add_redaction_annot(page, page_rect)
 
             except pytesseract.TesseractNotFoundError:
-                st.warning("Tesseract-OCR이 설치되지 않았거나 경로가 올바르지 않습니다. 스캔된 PDF의 텍스트 마스킹이 제한됩니다.", icon="⚠️")
+                # 경고 메시지를 한 번만 표시
+                if not tesseract_warning_shown:
+                    st.warning("Tesseract-OCR이 설치되지 않았거나 경로가 올바르지 않습니다. 스캔된 PDF의 텍스트 마스킹이 제한됩니다.", icon="⚠️")
+                    tesseract_warning_shown = True
                 pass
             except Exception as e:
                 st.error(f"OCR 처리 중 오류가 발생했습니다: {e}")
