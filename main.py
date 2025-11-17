@@ -6,11 +6,44 @@ from PIL import Image
 import io
 import os
 import re
+import subprocess
+import sys
 
-# --- Tesseract-OCR 경로 설정 ---
-# Streamlit Cloud 배포 시에는 경로 지정이 필요 없음 (자동 인식)
-# 로컬 Windows에서만 테스트할 때는 아래 주석 해제
-# pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+# --- Tesseract 설치 확인 및 경로 설정 ---
+def check_tesseract_installation():
+    """Tesseract 설치 여부 확인 및 자동 경로 설정"""
+    try:
+        # 리눅스/클라우드 환경에서 tesseract 경로 찾기
+        result = subprocess.run(['which', 'tesseract'], 
+                              capture_output=True, 
+                              text=True, 
+                              timeout=5)
+        if result.returncode == 0:
+            tesseract_path = result.stdout.strip()
+            pytesseract.pytesseract.tesseract_cmd = tesseract_path
+            return True, tesseract_path
+    except Exception as e:
+        pass
+    
+    # Windows 환경 체크
+    windows_paths = [
+        r'C:\Program Files\Tesseract-OCR\tesseract.exe',
+        r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe'
+    ]
+    for path in windows_paths:
+        if os.path.exists(path):
+            pytesseract.pytesseract.tesseract_cmd = path
+            return True, path
+    
+    # 기본 명령어로 실행 시도
+    try:
+        pytesseract.get_tesseract_version()
+        return True, "tesseract (기본 PATH)"
+    except Exception:
+        return False, None
+
+# 앱 시작 시 Tesseract 확인
+TESSERACT_AVAILABLE, TESSERACT_PATH = check_tesseract_installation()
 
 # --- 1. 마스킹 좌표 설정 (규칙 1) ---
 # 사용자가 쉽게 수정할 수 있도록 좌표 변수를 상단에 모음
@@ -53,12 +86,10 @@ def add_redaction_annot(page, rect):
     is_narrow = rect.width < 100 # 페이지 번호 영역의 너비는 보통 100pt를 넘지 않음
 
     if is_at_bottom and is_at_center and is_narrow:
-        # print(f"쪽 번호 영역으로 판단되어 마스킹 건너뜀: {rect}")
         return
 
     # 1페이지 상단 제목은 마스킹하지 않음
     if page.number == 0 and rect.y0 < 100:
-        # print(f"제목 영역으로 판단되어 마스킹 건너뜀: {rect}")
         return
 
     page.add_redact_annot(rect, fill=(1, 1, 1))
@@ -68,7 +99,7 @@ def process_pdf(uploaded_file):
     """PDF 파일을 읽어 민감정보를 마스킹하고 새로운 PDF 파일을 반환하는 메인 함수"""
     
     # OCR 경고 메시지를 한 번만 표시하기 위한 플래그
-    tesseract_warning_shown = False
+    ocr_warning_shown = False
     
     try:
         # 업로드된 파일 데이터를 BytesIO로 읽어 fitz에서 열기
@@ -119,15 +150,10 @@ def process_pdf(uploaded_file):
 
         # [규칙 3] OCR 기반 마스킹 (스캔된 PDF)
         # 1~6페이지(0~5)만 OCR 실행 (성능 최적화)
-        # - 1~2페이지: 수상경력의 "고등학교"
-        # - 5~6페이지: 봉사활동의 "고등학교"
-        should_run_ocr = page_num <= 5 and ((not text_found) or (page_num in [0, 1, 4, 5]))
+        should_run_ocr = TESSERACT_AVAILABLE and page_num <= 5 and ((not text_found) or (page_num in [0, 1, 4, 5]))
         
         if should_run_ocr:
             try:
-                # OCR 실행 로그
-                print(f"🔍 OCR 실행 중: {page_num + 1}페이지")
-                
                 # DPI를 높여서 작은 글씨도 인식 (300 → 400)
                 pix = page.get_pixmap(dpi=400)
                 img = Image.open(io.BytesIO(pix.tobytes("png")))
@@ -144,7 +170,6 @@ def process_pdf(uploaded_file):
                     config=custom_config
                 )
                 
-                ocr_found_count = 0
                 n_boxes = len(ocr_data['level'])
                 for i in range(n_boxes):
                     text = ocr_data['text'][i].strip()
@@ -156,7 +181,6 @@ def process_pdf(uploaded_file):
                         (x, y, w, h) = (ocr_data['left'][i], ocr_data['top'][i], ocr_data['width'][i], ocr_data['height'][i])
                         
                         # OCR 결과 좌표는 이미지 기준이므로 페이지 좌표로 변환
-                        # DPI가 400이므로 변환 비율도 조정
                         scale = page.rect.width / pix.width
                         img_rect = fitz.Rect(x, y, x + w, y + h)
                         page_rect = img_rect * scale
@@ -168,24 +192,11 @@ def process_pdf(uploaded_file):
                         page_rect.y1 += 2
                         
                         add_redaction_annot(page, page_rect)
-                        ocr_found_count += 1
-                        print(f"  ✅ OCR 마스킹: '{text}' at {page_rect}")
-                
-                if ocr_found_count > 0:
-                    print(f"  📊 {page_num + 1}페이지에서 {ocr_found_count}개 항목 마스킹 완료")
-                else:
-                    print(f"  ℹ️  {page_num + 1}페이지에서 '고등학교' 텍스트 미발견")
 
-            except pytesseract.TesseractNotFoundError:
-                # 경고 메시지를 한 번만 표시
-                if not tesseract_warning_shown:
-                    st.warning("Tesseract-OCR이 설치되지 않았거나 경로가 올바르지 않습니다. 스캔된 PDF의 텍스트 마스킹이 제한됩니다.", icon="⚠️")
-                    tesseract_warning_shown = True
-                print(f"  ❌ Tesseract 미설치")
-                pass
             except Exception as e:
-                st.error(f"OCR 처리 중 오류가 발생했습니다 (페이지 {page_num + 1}): {e}")
-                print(f"  ❌ OCR 오류: {e}")
+                if not ocr_warning_shown:
+                    st.warning(f"OCR 처리 중 일부 오류가 발생했습니다. 텍스트 마스킹이 제한될 수 있습니다.", icon="⚠️")
+                    ocr_warning_shown = True
                 pass
 
         # 해당 페이지에 추가된 모든 마스킹 주석을 실제로 적용
@@ -204,21 +215,34 @@ def process_pdf(uploaded_file):
 
 st.set_page_config(page_title="PDF 개인정보 마스킹 앱", page_icon="📄")
 st.title("🪄 PDF 개인정보 마스킹 도구")
+
+# Tesseract 상태 표시
+if TESSERACT_AVAILABLE:
+    st.success(f"✅ OCR 엔진 활성화됨 (스캔 PDF 지원)")
+else:
+    st.warning("""
+    ⚠️ OCR 엔진이 감지되지 않았습니다. 
+    - **디지털 PDF**: 정상 작동 (텍스트 검색 방식)
+    - **스캔 PDF**: 수상경력, 봉사활동란의 학교명이 마스킹되지 않을 수 있음
+    """, icon="⚠️")
+
 st.write("""
-1️⃣ 나이스에서 다운로드한 학생부 PDF 파일을 업로드 후, 주요 개인정보 마스킹 처리  
-2️⃣ 단, 스캔한 PDF는 Tesseract-OCR를 설치 후 사용, 그렇치 않으면 수상경력과 봉사실적란에 학교명이 노출 
+**사용 방법:**  
+1️⃣ 나이스에서 다운로드한 학생부 PDF 파일 업로드  
+2️⃣ 자동으로 주요 개인정보 마스킹 처리  
+3️⃣ 처리된 PDF 파일 다운로드
 """)
 
 uploaded_file = st.file_uploader(
-    "처리할 PDF 파일을 선택하세요. (최대 23페이지 내외)",
+    "처리할 PDF 파일을 선택하세요 (최대 23페이지)",
     type="pdf",
     accept_multiple_files=False
 )
 
 if uploaded_file is not None:
-    st.info(f"'{uploaded_file.name}' 파일이 업로드 되었습니다. 잠시 후, 마스킹이 시작됩니다...")
+    st.info(f"📄 '{uploaded_file.name}' 파일 업로드 완료")
 
-    with st.spinner("개인정보를 찾아 마스킹하는 중..."):
+    with st.spinner("🔒 개인정보 마스킹 중... (수십 초 소요될 수 있습니다)"):
         processed_pdf_buffer = process_pdf(uploaded_file)
 
     if processed_pdf_buffer:
@@ -228,8 +252,11 @@ if uploaded_file is not None:
         new_filename = f"(제거됨) {original_filename}.pdf"
 
         st.download_button(
-            label="마스킹된 PDF 파일 다운로드",
+            label="📥 마스킹된 PDF 다운로드",
             data=processed_pdf_buffer,
             file_name=new_filename,
-            mime="application/pdf"
+            mime="application/pdf",
+            type="primary"
         )
+        
+        st.info("💡 다운로드 후 반드시 PDF를 열어 개인정보가 제대로 마스킹되었는지 확인하세요.", icon="💡")
