@@ -136,7 +136,8 @@ def process_pdf(uploaded_file):
             except pytesseract.TesseractNotFoundError:
                 # 경고 메시지를 한 번만 표시
                 if not tesseract_warning_shown:
-                    st.warning("Tesseract-OCR이 설치되지 않았거나 경로가 올바르지 않습니다. 스캔된 PDF의 텍스트 마스킹이 제한됩니다.", icon="⚠️")
+                    st.warning("Tesseract-OCR이 설치되지 않았거나 경로가 올바르지 않습니다.  
+                    이 경우, 스캔된 PDF의 텍스트 마스킹이 제한됩니다.", icon="⚠️")
                     tesseract_warning_shown = True
                 pass
             except Exception as e:
