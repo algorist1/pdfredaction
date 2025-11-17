@@ -6,6 +6,8 @@ from PIL import Image
 import io
 import os
 import re
+import cv2  # OpenCV 추가
+import numpy as np # OpenCV와 함께 사용할 NumPy 추가
 
 # --- Tesseract-OCR 경로 설정 ---
 # Streamlit Cloud 배포 시에는 경로 지정이 필요 없음 (자동 인식)
@@ -53,12 +55,10 @@ def add_redaction_annot(page, rect):
     is_narrow = rect.width < 100 # 페이지 번호 영역의 너비는 보통 100pt를 넘지 않음
 
     if is_at_bottom and is_at_center and is_narrow:
-        # print(f"쪽 번호 영역으로 판단되어 마스킹 건너뜀: {rect}")
         return
 
     # 1페이지 상단 제목은 마스킹하지 않음
     if page.number == 0 and rect.y0 < 100:
-        # print(f"제목 영역으로 판단되어 마스킹 건너뜀: {rect}")
         return
 
     page.add_redact_annot(rect, fill=(1, 1, 1))
@@ -119,31 +119,43 @@ def process_pdf(uploaded_file):
 
         # [규칙 3] OCR 기반 마스킹 (스캔된 PDF)
         # 1~6페이지(0~5)만 OCR 실행 (성능 최적화)
-        # - 1~2페이지: 수상경력의 "고등학교"
-        # - 5~6페이지: 봉사활동의 "고등학교"
         should_run_ocr = page_num <= 5 and ((not text_found) or (page_num in [0, 1, 4, 5]))
         
         if should_run_ocr:
             try:
-                # OCR 실행 로그
                 print(f"🔍 OCR 실행 중: {page_num + 1}페이지")
                 
-                # DPI를 높여서 작은 글씨도 인식 (300 → 400)
                 pix = page.get_pixmap(dpi=400)
-                img = Image.open(io.BytesIO(pix.tobytes("png")))
+                img_bytes = pix.tobytes("png")
                 
-                # 이미지 전처리: 그레이스케일 변환 (배경색 제거 효과)
-                img = img.convert('L')
+                # Pillow 이미지를 OpenCV 형식(numpy array)으로 변환
+                pil_img = Image.open(io.BytesIO(img_bytes))
+                cv_img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+
+                # --- OpenCV를 이용한 이미지 전처리 (OCR 인식률 향상) ---
+                # 1. 그레이스케일 변환
+                gray_img = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
                 
-                # OCR 설정: PSM 모드 조정 (자동 페이지 분석)
+                # 2. 이진화 (Thresholding): 배경 노이즈를 제거하고 글자를 뚜렷하게 만듦
+                #    OTSU 알고리즘은 이미지의 히스토그램을 분석하여 최적의 임계값을 자동으로 결정
+                _, binary_img = cv2.threshold(gray_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                
+                # Tesseract가 처리할 수 있도록 OpenCV 이미지를 다시 Pillow 이미지로 변환
+                img_for_ocr = Image.fromarray(binary_img)
+                
+                # OCR 설정
                 custom_config = r'--oem 3 --psm 3'
                 ocr_data = pytesseract.image_to_data(
-                    img, 
+                    img_for_ocr, # 전처리된 이미지 사용
                     lang='kor', 
                     output_type=Output.DICT,
                     config=custom_config
                 )
                 
+                # # [디버깅용] OCR로 인식된 전체 텍스트를 확인하고 싶을 때 주석 해제
+                # all_text = " ".join(ocr_data['text']).strip()
+                # print(f"  OCR Result for page {page_num + 1}: {all_text}")
+
                 ocr_found_count = 0
                 n_boxes = len(ocr_data['level'])
                 for i in range(n_boxes):
@@ -155,13 +167,10 @@ def process_pdf(uploaded_file):
                     if HIGH_SCHOOL_REGEX.search(text):
                         (x, y, w, h) = (ocr_data['left'][i], ocr_data['top'][i], ocr_data['width'][i], ocr_data['height'][i])
                         
-                        # OCR 결과 좌표는 이미지 기준이므로 페이지 좌표로 변환
-                        # DPI가 400이므로 변환 비율도 조정
                         scale = page.rect.width / pix.width
                         img_rect = fitz.Rect(x, y, x + w, y + h)
                         page_rect = img_rect * scale
                         
-                        # 마스킹 영역을 약간 확장 (여백 추가)
                         page_rect.x0 -= 2
                         page_rect.y0 -= 2
                         page_rect.x1 += 2
@@ -177,7 +186,6 @@ def process_pdf(uploaded_file):
                     print(f"  ℹ️  {page_num + 1}페이지에서 '고등학교' 텍스트 미발견")
 
             except pytesseract.TesseractNotFoundError:
-                # 경고 메시지를 한 번만 표시
                 if not tesseract_warning_shown:
                     st.warning("Tesseract-OCR이 설치되지 않았거나 경로가 올바르지 않습니다. 스캔된 PDF의 텍스트 마스킹이 제한됩니다.", icon="⚠️")
                     tesseract_warning_shown = True
