@@ -23,7 +23,10 @@ PAGE_1_BBOXES = [
     [80.2, 337.3, 388.3, 369.7],  # 학적사항 영역
 ]
 
-# 모든 페이지에 공통으로 적용될 마스킹 영역
+# 2페이지의 고정 마스킹 영역 (수상경력 계속)
+PAGE_2_BBOXES = [
+    [28.3, 80.0, 566.9, 520.0],   # 2페이지 수상경력란 전체
+]
 ALL_PAGES_BBOXES = [
     [28.3, 768.7, 277.8, 807.9],   # 모든 페이지 맨하단 고등학교이름 영역
     [328.0, 768.7, 566.9, 839.1],  # 모든 페이지 맨하단 반/번호/성명 영역
@@ -122,10 +125,26 @@ def process_pdf(uploaded_file):
         
         if should_run_ocr:
             try:
-                pix = page.get_pixmap(dpi=300)
-                img = Image.open(io.BytesIO(pix.tobytes("png")))
-                ocr_data = pytesseract.image_to_data(img, lang='kor', output_type=Output.DICT)
+                # OCR 실행 로그
+                print(f"🔍 OCR 실행 중: {page_num + 1}페이지")
                 
+                # DPI를 높여서 작은 글씨도 인식 (300 → 400)
+                pix = page.get_pixmap(dpi=400)
+                img = Image.open(io.BytesIO(pix.tobytes("png")))
+                
+                # 이미지 전처리: 그레이스케일 변환 (배경색 제거 효과)
+                img = img.convert('L')
+                
+                # OCR 설정: PSM 모드 조정 (자동 페이지 분석)
+                custom_config = r'--oem 3 --psm 3'
+                ocr_data = pytesseract.image_to_data(
+                    img, 
+                    lang='kor', 
+                    output_type=Output.DICT,
+                    config=custom_config
+                )
+                
+                ocr_found_count = 0
                 n_boxes = len(ocr_data['level'])
                 for i in range(n_boxes):
                     text = ocr_data['text'][i].strip()
@@ -135,19 +154,38 @@ def process_pdf(uploaded_file):
                     # "고등학교"가 포함된 단어 찾기
                     if HIGH_SCHOOL_REGEX.search(text):
                         (x, y, w, h) = (ocr_data['left'][i], ocr_data['top'][i], ocr_data['width'][i], ocr_data['height'][i])
+                        
                         # OCR 결과 좌표는 이미지 기준이므로 페이지 좌표로 변환
+                        # DPI가 400이므로 변환 비율도 조정
+                        scale = page.rect.width / pix.width
                         img_rect = fitz.Rect(x, y, x + w, y + h)
-                        page_rect = img_rect * page.rect.width / img.width 
+                        page_rect = img_rect * scale
+                        
+                        # 마스킹 영역을 약간 확장 (여백 추가)
+                        page_rect.x0 -= 2
+                        page_rect.y0 -= 2
+                        page_rect.x1 += 2
+                        page_rect.y1 += 2
+                        
                         add_redaction_annot(page, page_rect)
+                        ocr_found_count += 1
+                        print(f"  ✅ OCR 마스킹: '{text}' at {page_rect}")
+                
+                if ocr_found_count > 0:
+                    print(f"  📊 {page_num + 1}페이지에서 {ocr_found_count}개 항목 마스킹 완료")
+                else:
+                    print(f"  ℹ️  {page_num + 1}페이지에서 '고등학교' 텍스트 미발견")
 
             except pytesseract.TesseractNotFoundError:
                 # 경고 메시지를 한 번만 표시
                 if not tesseract_warning_shown:
                     st.warning("Tesseract-OCR이 설치되지 않았거나 경로가 올바르지 않습니다. 스캔된 PDF의 텍스트 마스킹이 제한됩니다.", icon="⚠️")
                     tesseract_warning_shown = True
+                print(f"  ❌ Tesseract 미설치")
                 pass
             except Exception as e:
-                st.error(f"OCR 처리 중 오류가 발생했습니다: {e}")
+                st.error(f"OCR 처리 중 오류가 발생했습니다 (페이지 {page_num + 1}): {e}")
+                print(f"  ❌ OCR 오류: {e}")
                 pass
 
         # 해당 페이지에 추가된 모든 마스킹 주석을 실제로 적용
