@@ -1,0 +1,6 @@
+tesseract-ocr
+tesseract-ocr-kor
+libsm6
+libxext6
+libxrender-dev
+libgomp1
