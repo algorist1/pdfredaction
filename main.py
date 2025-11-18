@@ -139,7 +139,7 @@ def process_pdf(uploaded_file):
 
             except pytesseract.TesseractNotFoundError:
                 if not tesseract_warning_shown:
-                    st.warning("Tesseract-OCR이 설치되지 않았거나 경로가 올바르지 않습니다. 스캔된 PDF의 텍스트 마스킹이 제한됩니다.", icon="⚠")
+                    st.warning("Tesseract-OCR이 설치되지 않았거나 경로가 올바르지 않습니다. 스캔된 PDF의 텍스트 마스킹이 제한됩니다.", icon="⚠️")
                     tesseract_warning_shown = True
                 pass
             except Exception as e:
@@ -174,7 +174,7 @@ uploaded_file = st.file_uploader(
 if uploaded_file is not None:
     st.info(f"'{uploaded_file.name}' 파일이 업로드 되었습니다. 잠시 후, 마스킹이 시작됩니다...")
 
-    with st.spinner("개인정보(학교명, 대학명 등)를 찾아 마스킹하는 중..."):
+    with st.spinner("개인정보를 찾아 마스킹하는 중..."):
         processed_pdf_buffer = process_pdf(uploaded_file)
 
     if processed_pdf_buffer:
