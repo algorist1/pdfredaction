@@ -6,6 +6,7 @@ from PIL import Image
 import io
 import os
 import re
+import zipfile  # 여러 파일 압축을 위해 추가
 
 # --- Tesseract-OCR 경로 설정 (선택 사항) ---
 # 시스템 PATH에 Tesseract 경로가 없는 경우, 아래 주석을 해제하고 직접 경로를 지정하세요.
@@ -65,10 +66,12 @@ def process_pdf(uploaded_file):
     tesseract_warning_shown = False
     
     try:
+        # uploaded_file은 BytesIO와 유사하게 동작하므로 바로 read() 가능
+        # 여러 번 읽힐 가능성에 대비해 seek(0)는 호출 측이나 여기서 처리 (Streamlit은 매번 새로운 객체를 줌)
         pdf_data = uploaded_file.read()
         doc = fitz.open(stream=pdf_data, filetype="pdf")
     except Exception as e:
-        st.error(f"PDF 파일을 여는 중 오류가 발생했습니다: {e}")
+        st.error(f"PDF 파일을 여는 중 오류가 발생했습니다 ({uploaded_file.name}): {e}")
         return None
 
     # 최대 23페이지까지만 처리
@@ -138,12 +141,10 @@ def process_pdf(uploaded_file):
                         add_redaction_annot(page, page_rect)
 
             except pytesseract.TesseractNotFoundError:
-                if not tesseract_warning_shown:
-                    st.warning("Tesseract-OCR이 설치되지 않았거나 경로가 올바르지 않습니다. 스캔된 PDF의 텍스트 마스킹이 제한됩니다.", icon="⚠️")
-                    tesseract_warning_shown = True
-                pass
+                # 경고는 UI 루프 바깥에서 처리하거나, 너무 자주 뜨지 않도록 주의
+                pass 
             except Exception as e:
-                st.error(f"OCR 처리 중 오류가 발생했습니다: {e}")
+                st.error(f"OCR 처리 중 오류가 발생했습니다 ({uploaded_file.name}): {e}")
                 pass
 
         page.apply_redactions()
@@ -162,30 +163,65 @@ st.set_page_config(page_title="PDF 개인정보 마스킹 앱", page_icon="📄"
 st.title("🪄 PDF 개인정보 마스킹 도구")
 st.write("""
 1️⃣ 나이스에서 다운로드한 학생부 PDF 파일을 업로드 후, 주요 개인정보 마스킹 처리  
-2️⃣ 단, 스캔한 PDF는 스캔 해상도 품질에 따라 수상경력과 봉사실적란에 학교명이 노출  
+2️⃣ 단, 스캔한 PDF는 스캔 해상도 품질에 따라 수상경력과 봉사실적란에 학교명이 노출될 수 있음  
+3️⃣ 여러 파일을 한 번에 업로드하여 일괄 처리할 수 있습니다.
 """)
 
-uploaded_file = st.file_uploader(
-    "처리할 PDF 파일을 선택하세요. (최대 23페이지 내외)",
+uploaded_files = st.file_uploader(
+    "처리할 PDF 파일을 선택하세요. (여러 파일 선택 가능)",
     type="pdf",
-    accept_multiple_files=False
+    accept_multiple_files=True # 다중 파일 업로드 허용
 )
 
-if uploaded_file is not None:
-    st.info(f"'{uploaded_file.name}' 파일이 업로드 되었습니다. 잠시 후, 마스킹이 시작됩니다...")
+if uploaded_files:
+    count = len(uploaded_files)
+    st.info(f"총 {count}개의 파일이 업로드 되었습니다. 잠시 후, 마스킹이 시작됩니다...")
 
-    with st.spinner("개인정보를 찾아 마스킹하는 중..."):
-        processed_pdf_buffer = process_pdf(uploaded_file)
+    processed_results = [] # (파일명, 데이터Buffer) 튜플을 저장할 리스트
 
-    if processed_pdf_buffer:
-        st.success("✅ 마스킹 처리가 완료되었습니다!")
+    with st.spinner("개인정보(학교명, 대학명 등)를 찾아 마스킹하는 중..."):
+        # 진행 상황 바 (선택 사항)
+        progress_bar = st.progress(0)
+        
+        for idx, uploaded_file in enumerate(uploaded_files):
+            processed_buffer = process_pdf(uploaded_file)
+            if processed_buffer:
+                processed_results.append((uploaded_file.name, processed_buffer))
+            
+            # 진행률 업데이트
+            progress_bar.progress((idx + 1) / count)
 
-        original_filename = os.path.splitext(uploaded_file.name)[0]
-        new_filename = f"(제거됨) {original_filename}.pdf"
+    if processed_results:
+        st.success("✅ 모든 파일의 마스킹 처리가 완료되었습니다!")
 
-        st.download_button(
-            label="마스킹된 PDF 파일 다운로드",
-            data=processed_pdf_buffer,
-            file_name=new_filename,
-            mime="application/pdf"
-        )
+        # 1개일 때는 그냥 PDF 다운로드
+        if len(processed_results) == 1:
+            filename, buffer = processed_results[0]
+            original_filename = os.path.splitext(filename)[0]
+            new_filename = f"(제거됨) {original_filename}.pdf"
+
+            st.download_button(
+                label="마스킹된 PDF 파일 다운로드",
+                data=buffer,
+                file_name=new_filename,
+                mime="application/pdf"
+            )
+        
+        # 2개 이상일 때는 ZIP으로 묶어서 다운로드
+        else:
+            zip_buffer = io.BytesIO()
+            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+                for filename, buffer in processed_results:
+                    original_filename = os.path.splitext(filename)[0]
+                    new_filename = f"(제거됨) {original_filename}.pdf"
+                    # ZIP 파일 내에 쓰기
+                    zf.writestr(new_filename, buffer.getvalue())
+            
+            zip_buffer.seek(0)
+
+            st.download_button(
+                label="모든 파일(ZIP) 다운로드",
+                data=zip_buffer,
+                file_name="마스킹된_파일모음.zip",
+                mime="application/zip"
+            )
