@@ -161,9 +161,8 @@ def process_pdf(uploaded_file):
 st.set_page_config(page_title="PDF 개인정보 마스킹 앱", page_icon="📄")
 st.title("🪄 PDF 개인정보 마스킹 도구")
 st.write("""
-1⃣ 나이스에서 다운로드한 학생부 PDF 파일을 업로드 후, 주요 개인정보 마스킹 처리  
-2⃣ 단, 스캔한 PDF는 스캔 해상도 품질에 따라 수상경력과 봉사실적란에 학교명이 노출될 수 있음  
-3⃣ 'OO고등학교' 및 'OO대학교'가 포함된 학교명도 자동으로 찾아 마스킹합니다.
+1️⃣ 나이스에서 다운로드한 학생부 PDF 파일을 업로드 후, 주요 개인정보 마스킹 처리  
+2️⃣ 단, 스캔한 PDF는 스캔 해상도 품질에 따라 수상경력과 봉사실적란에 학교명이 노출  
 """)
 
 uploaded_file = st.file_uploader(
