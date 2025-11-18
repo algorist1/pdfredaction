@@ -12,8 +12,6 @@ import re
 # 예: pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 # --- 1. 마스킹 좌표 설정 (규칙 1) ---
-# 사용자가 쉽게 수정할 수 있도록 좌표 변수를 상단에 모음
-
 # 1페이지의 고정 마스킹 영역 (BBOX: [x0, y0, x1, y1])
 PAGE_1_BBOXES = [
     [262.2, 189.9, 447.9, 253.6],  # 반/번호/담임성명 영역
@@ -32,6 +30,10 @@ ALL_PAGES_BBOXES = [
 # "(어쩌구)고등학교" 패턴을 찾기 위한 정규식
 HIGH_SCHOOL_REGEX = re.compile(r'\S+고등학교')
 
+# [추가됨] "(어쩌구)대학교(어쩌구)" 패턴을 찾기 위한 정규식
+# 예: "동국대학교", "동국대학교부속", "인하대학교사범대학부속" 등 포함
+UNIVERSITY_REGEX = re.compile(r'\S*대학교\S*')
+
 # "반", "번호", "성명" 레이블 및 값
 STUDENT_INFO_KEYWORDS = ["반", "번호", "성명"]
 
@@ -43,18 +45,15 @@ def add_redaction_annot(page, rect):
     page_height = page.rect.height
 
     # 페이지 하단 중앙의 쪽 번호 영역은 마스킹하지 않도록 예외 처리
-    # 조건 강화: 1)하단 영역, 2)중앙 영역, 3)너비가 좁은 영역(페이지 번호 특징)
     is_at_bottom = rect.y1 > page_height - 50
     is_at_center = (page_width / 2 - 50) < rect.x0 < (page_width / 2 + 50)
-    is_narrow = rect.width < 100 # 페이지 번호 영역의 너비는 보통 100pt를 넘지 않음
+    is_narrow = rect.width < 100 
 
     if is_at_bottom and is_at_center and is_narrow:
-        # print(f"쪽 번호 영역으로 판단되어 마스킹 건너뜀: {rect}")
         return
 
     # 1페이지 상단 제목은 마스킹하지 않음
     if page.number == 0 and rect.y0 < 100:
-        # print(f"제목 영역으로 판단되어 마스킹 건너뜀: {rect}")
         return
 
     page.add_redact_annot(rect, fill=(1, 1, 1))
@@ -63,11 +62,9 @@ def add_redaction_annot(page, rect):
 def process_pdf(uploaded_file):
     """PDF 파일을 읽어 민감정보를 마스킹하고 새로운 PDF 파일을 반환하는 메인 함수"""
     
-    # OCR 경고 메시지를 한 번만 표시하기 위한 플래그
     tesseract_warning_shown = False
     
     try:
-        # 업로드된 파일 데이터를 BytesIO로 읽어 fitz에서 열기
         pdf_data = uploaded_file.read()
         doc = fitz.open(stream=pdf_data, filetype="pdf")
     except Exception as e:
@@ -77,37 +74,41 @@ def process_pdf(uploaded_file):
     # 최대 23페이지까지만 처리
     num_pages_to_process = min(len(doc), 23)
 
-    # 페이지 순회하며 마스킹 작업 수행
     for page_num in range(num_pages_to_process):
         page = doc[page_num]
 
         # [규칙 1] 고정 좌표 기반 마스킹
-        if page_num == 0: # 1페이지인 경우
+        if page_num == 0: 
             for bbox in PAGE_1_BBOXES:
                 add_redaction_annot(page, fitz.Rect(bbox))
         
-        # 모든 페이지 공통 좌표 마스킹
         for bbox in ALL_PAGES_BBOXES:
             add_redaction_annot(page, fitz.Rect(bbox))
 
         # [규칙 2] 텍스트 검색 기반 마스킹 (디지털 PDF)
         text_found = False
         
-        # 1) "( )고등학교" 검색
+        # 1) 정규식 검색 (고등학교 + 대학교 포함 단어)
         words = page.get_text("words")
         for word in words:
             word_text = word[4]
-            if HIGH_SCHOOL_REGEX.search(word_text):
+            # 고등학교 패턴 OR 대학교 패턴 검색
+            if HIGH_SCHOOL_REGEX.search(word_text) or UNIVERSITY_REGEX.search(word_text):
                 add_redaction_annot(page, fitz.Rect(word[:4]))
                 text_found = True
         
-        # 2) 수상경력, 봉사활동 등 특정 영역의 "고등학교" 검색
-        if page_num in [0, 1, 4, 5]: # 1~2, 5~6 페이지
+        # 2) 단순 문자열 검색 ("고등학교", "대학교" 키워드 자체도 한번 더 체크)
+        if page_num in [0, 1, 4, 5]: 
+            # 고등학교 검색
             for inst in page.search_for("고등학교"):
                  add_redaction_annot(page, inst)
                  text_found = True
+            # [추가됨] 대학교 검색 (혹시 정규식에서 놓친 텍스트 조각을 위해)
+            for inst in page.search_for("대학교"):
+                 add_redaction_annot(page, inst)
+                 text_found = True
 
-        # 3) 모든 페이지 하단 "반", "번호", "성명" 검색
+        # 3) 학생 정보 키워드 검색
         for keyword in STUDENT_INFO_KEYWORDS:
             for inst in page.search_for(keyword):
                 add_redaction_annot(page, inst)
@@ -126,27 +127,27 @@ def process_pdf(uploaded_file):
                     if not text:
                         continue
 
-                    if HIGH_SCHOOL_REGEX.search(text) or text in STUDENT_INFO_KEYWORDS:
+                    # 고등학교 패턴 OR 대학교 패턴 OR 학생정보 키워드 검색
+                    if (HIGH_SCHOOL_REGEX.search(text) or 
+                        UNIVERSITY_REGEX.search(text) or 
+                        text in STUDENT_INFO_KEYWORDS):
+                        
                         (x, y, w, h) = (ocr_data['left'][i], ocr_data['top'][i], ocr_data['width'][i], ocr_data['height'][i])
-                        # OCR 결과 좌표는 이미지 기준이므로 페이지 좌표로 변환해야 함
                         img_rect = fitz.Rect(x, y, x + w, y + h)
                         page_rect = img_rect * page.rect.width / img.width 
                         add_redaction_annot(page, page_rect)
 
             except pytesseract.TesseractNotFoundError:
-                # 경고 메시지를 한 번만 표시
                 if not tesseract_warning_shown:
-                    st.warning("Tesseract-OCR이 설치되지 않았거나 경로가 올바르지 않습니다. 스캔된 PDF의 텍스트 마스킹이 제한됩니다.", icon="⚠️")
+                    st.warning("Tesseract-OCR이 설치되지 않았거나 경로가 올바르지 않습니다. 스캔된 PDF의 텍스트 마스킹이 제한됩니다.", icon="⚠")
                     tesseract_warning_shown = True
                 pass
             except Exception as e:
                 st.error(f"OCR 처리 중 오류가 발생했습니다: {e}")
                 pass
 
-        # 해당 페이지에 추가된 모든 마스킹 주석을 실제로 적용
         page.apply_redactions()
 
-    # 처리된 PDF를 메모리에 저장
     output_buffer = io.BytesIO()
     doc.save(output_buffer)
     doc.close()
@@ -160,8 +161,9 @@ def process_pdf(uploaded_file):
 st.set_page_config(page_title="PDF 개인정보 마스킹 앱", page_icon="📄")
 st.title("🪄 PDF 개인정보 마스킹 도구")
 st.write("""
-1️⃣ 나이스에서 다운로드한 학생부 PDF 파일을 업로드 후, 주요 개인정보 마스킹 처리  
-2️⃣ 단, 스캔한 PDF는 스캔 해상도 품질에 따라 수상경력과 봉사실적란에 학교명이 노출 
+1⃣ 나이스에서 다운로드한 학생부 PDF 파일을 업로드 후, 주요 개인정보 마스킹 처리  
+2⃣ 단, 스캔한 PDF는 스캔 해상도 품질에 따라 수상경력과 봉사실적란에 학교명이 노출될 수 있음  
+3⃣ 'OO고등학교' 및 'OO대학교'가 포함된 학교명도 자동으로 찾아 마스킹합니다.
 """)
 
 uploaded_file = st.file_uploader(
@@ -173,7 +175,7 @@ uploaded_file = st.file_uploader(
 if uploaded_file is not None:
     st.info(f"'{uploaded_file.name}' 파일이 업로드 되었습니다. 잠시 후, 마스킹이 시작됩니다...")
 
-    with st.spinner("개인정보를 찾아 마스킹하는 중..."):
+    with st.spinner("개인정보(학교명, 대학명 등)를 찾아 마스킹하는 중..."):
         processed_pdf_buffer = process_pdf(uploaded_file)
 
     if processed_pdf_buffer:
