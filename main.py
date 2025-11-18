@@ -175,28 +175,45 @@ uploaded_files = st.file_uploader(
 
 if uploaded_files:
     count = len(uploaded_files)
-    st.info(f"총 {count}개의 파일이 업로드 되었습니다. 잠시 후, 마스킹이 시작됩니다...")
+    
+    # Session State 초기화 (처리된 데이터를 저장하기 위함)
+    if 'processed_data' not in st.session_state:
+        st.session_state.processed_data = None
+    if 'last_uploaded_files' not in st.session_state:
+        st.session_state.last_uploaded_files = None
 
-    processed_results = [] # (파일명, 데이터Buffer) 튜플을 저장할 리스트
-
-    with st.spinner("개인정보(학교명, 대학명 등)를 찾아 마스킹하는 중..."):
-        # 진행 상황 바 (선택 사항)
-        progress_bar = st.progress(0)
+    # 새로운 파일이 업로드 되었거나, 이전에 처리한 파일과 다를 경우에만 실행
+    if st.session_state.last_uploaded_files != uploaded_files:
+        st.info(f"총 {count}개의 파일이 업로드 되었습니다. 잠시 후, 마스킹이 시작됩니다...")
         
-        for idx, uploaded_file in enumerate(uploaded_files):
-            processed_buffer = process_pdf(uploaded_file)
-            if processed_buffer:
-                processed_results.append((uploaded_file.name, processed_buffer))
+        processed_results = [] # (파일명, 데이터Buffer) 튜플을 저장할 리스트
+
+        with st.spinner("개인정보를 찾아 마스킹하는 중..."):
+            # 진행 상황 바 (선택 사항)
+            progress_bar = st.progress(0)
             
-            # 진행률 업데이트
-            progress_bar.progress((idx + 1) / count)
+            for idx, uploaded_file in enumerate(uploaded_files):
+                processed_buffer = process_pdf(uploaded_file)
+                if processed_buffer:
+                    processed_results.append((uploaded_file.name, processed_buffer))
+                
+                # 진행률 업데이트
+                progress_bar.progress((idx + 1) / count)
+        
+        # 처리 완료 후 Session State에 저장
+        st.session_state.processed_data = processed_results
+        st.session_state.last_uploaded_files = uploaded_files
+        
+        if processed_results:
+            st.success("✅ 모든 파일의 마스킹 처리가 완료되었습니다!")
 
-    if processed_results:
-        st.success("✅ 모든 파일의 마스킹 처리가 완료되었습니다!")
-
+    # 저장된 결과가 있을 경우 다운로드 버튼 표시 (재실행 방지)
+    if st.session_state.processed_data:
+        results = st.session_state.processed_data
+        
         # 1개일 때는 그냥 PDF 다운로드
-        if len(processed_results) == 1:
-            filename, buffer = processed_results[0]
+        if len(results) == 1:
+            filename, buffer = results[0]
             original_filename = os.path.splitext(filename)[0]
             new_filename = f"(제거됨) {original_filename}.pdf"
 
@@ -211,7 +228,7 @@ if uploaded_files:
         else:
             zip_buffer = io.BytesIO()
             with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-                for filename, buffer in processed_results:
+                for filename, buffer in results:
                     original_filename = os.path.splitext(filename)[0]
                     new_filename = f"(제거됨) {original_filename}.pdf"
                     # ZIP 파일 내에 쓰기
